@@ -45,6 +45,14 @@ service cloud.firestore {
       return hasProfile() && (myUser().role == 'super_admin' || myUser().orgId == orgId);
     }
 
+    function selectedStudentsFieldValid() {
+      return request.resource.data.get('selectedStudentUids', null) == resource.data.get('selectedStudentUids', null)
+        || (
+          resource.data.role in ['manager', 'admin', 'super_admin']
+          && request.resource.data.selectedStudentUids is list
+        );
+    }
+
     function userImmutableFieldsUnchanged() {
       return request.resource.data.role == resource.data.role
         && request.resource.data.orgId == resource.data.orgId
@@ -52,7 +60,8 @@ service cloud.firestore {
         && request.resource.data.managerId == resource.data.managerId
         && request.resource.data.memberId == resource.data.memberId
         && request.resource.data.uid == resource.data.uid
-        && request.resource.data.get('linkedStudentUids', null) == resource.data.get('linkedStudentUids', null);
+        && request.resource.data.get('linkedStudentUids', null) == resource.data.get('linkedStudentUids', null)
+        && selectedStudentsFieldValid();
     }
 
     // Eligibility check for submitting self-attendance to a Live Session

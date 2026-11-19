@@ -19,7 +19,10 @@ import {
   Play,
   QrCode,
   Radio,
+  Save,
   ScanLine,
+  Search,
+  Users,
   X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -36,9 +39,12 @@ import type {
 } from '../types';
 import {
   approvePendingUser,
+  fetchInstitutionStudents,
   fetchManagerMembers,
   fetchUsersByClass,
   rejectPendingUser,
+  resolveTeacherStudents,
+  saveTeacherSelectedStudents,
 } from '../services/userService';
 import { fetchAttendanceForManager } from '../services/attendanceService';
 import { fetchLeavesForUser } from '../services/leaveService';
@@ -69,7 +75,12 @@ export const ManagerDashboard: React.FC = () => {
   const { showToast } = useToast();
 
   const [loading, setLoading] = useState(true);
+  const [institutionStudents, setInstitutionStudents] = useState<UserProfile[]>([]);
+  const [fallbackMembers, setFallbackMembers] = useState<UserProfile[]>([]);
   const [members, setMembers] = useState<UserProfile[]>([]);
+  const [studentSearch, setStudentSearch] = useState('');
+  const [selectedStudentDraft, setSelectedStudentDraft] = useState<Set<string>>(new Set());
+  const [savingStudents, setSavingStudents] = useState(false);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState<LeaveRequest[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -79,6 +90,7 @@ export const ManagerDashboard: React.FC = () => {
   const [showQrModal, setShowQrModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [sendingAlerts, setSendingAlerts] = useState(false);
+  const selectAllCheckboxRef = React.useRef<HTMLInputElement | null>(null);
 
   const today = useMemo(() => getOrgDateString(org?.timezone || 'Asia/Kolkata'), [org?.timezone]);
   const todayWeekday = useMemo(
@@ -102,20 +114,24 @@ export const ManagerDashboard: React.FC = () => {
     };
   }, [org, profile]);
 
+  const hasLoadedOnceRef = React.useRef(false);
+
   const loadData = useCallback(async () => {
     if (!org || !profile) return;
-    setLoading(true);
+    if (!hasLoadedOnceRef.current) setLoading(true);
     try {
       const fromDate = getPastDates(30, org.timezone)[0];
       const assignedClassIds = Array.from(new Set(assignments.map((a) => a.classId)));
 
-      const [directMembers, classMembersNested, attRecs, leavesRes, notices] = await Promise.all([
-        fetchManagerMembers(org.id, profile.uid),
-        Promise.all(assignedClassIds.map((cid) => fetchUsersByClass(org.id, cid))),
-        fetchAttendanceForManager(org.id, profile.uid, { fromDate, toDate: today }),
-        fetchLeavesForUser(profile),
-        fetchAnnouncements(profile),
-      ]);
+      const [allInstStudents, directMembers, classMembersNested, attRecs, leavesRes, notices] =
+        await Promise.all([
+          fetchInstitutionStudents(org.id),
+          fetchManagerMembers(org.id, profile.uid),
+          Promise.all(assignedClassIds.map((cid) => fetchUsersByClass(org.id, cid))),
+          fetchAttendanceForManager(org.id, profile.uid, { fromDate, toDate: today }),
+          fetchLeavesForUser(profile),
+          fetchAnnouncements(profile),
+        ]);
 
       // Deduplicate students across assigned classes + legacy direct managerId
       const studentMap = new Map<string, UserProfile>();
@@ -123,11 +139,16 @@ export const ManagerDashboard: React.FC = () => {
       for (const batch of classMembersNested) {
         for (const m of batch) studentMap.set(m.uid, m);
       }
+      const defaultMembers = Array.from(studentMap.values()).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
 
-      setMembers(Array.from(studentMap.values()).sort((a, b) => a.name.localeCompare(b.name)));
+      setInstitutionStudents(allInstStudents);
+      setFallbackMembers(defaultMembers);
       setAttendance(attRecs);
       setPendingLeaves(leavesRes.teamLeaves.filter((l) => l.status === 'pending'));
       setAnnouncements(notices.slice(0, 4));
+      hasLoadedOnceRef.current = true;
     } catch (err) {
       showToast(t(getFirebaseErrorKey(err)), 'error');
     } finally {
@@ -139,8 +160,124 @@ export const ManagerDashboard: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  // Keep teacher's class list & selection checkboxes synced with Firestore saved selection
+  const savedSelectionKey = useMemo(
+    () =>
+      Array.isArray(profile?.selectedStudentUids)
+        ? profile.selectedStudentUids.join(',')
+        : '__default__',
+    [profile?.selectedStudentUids]
+  );
+
+  useEffect(() => {
+    if (!profile) return;
+    const resolved = resolveTeacherStudents(institutionStudents, profile, fallbackMembers);
+    setMembers(resolved);
+    if (Array.isArray(profile.selectedStudentUids)) {
+      const validIds = new Set(institutionStudents.map((s) => s.uid));
+      setSelectedStudentDraft(
+        new Set(profile.selectedStudentUids.filter((uid) => validIds.has(uid)))
+      );
+    } else {
+      setSelectedStudentDraft(new Set(fallbackMembers.map((m) => m.uid)));
+    }
+  }, [institutionStudents, fallbackMembers, profile, savedSelectionKey]);
+
+  const filteredInstitutionStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return institutionStudents;
+    return institutionStudents.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.memberId || '').toLowerCase().includes(q) ||
+        (s.rollNumber || '').toLowerCase().includes(q)
+    );
+  }, [institutionStudents, studentSearch]);
+
+  const allFilteredSelected =
+    filteredInstitutionStudents.length > 0 &&
+    filteredInstitutionStudents.every((s) => selectedStudentDraft.has(s.uid));
+  const someFilteredSelected =
+    filteredInstitutionStudents.some((s) => selectedStudentDraft.has(s.uid)) &&
+    !allFilteredSelected;
+
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = someFilteredSelected;
+    }
+  }, [someFilteredSelected]);
+
+  const handleToggleStudent = (uid: string) => {
+    setSelectedStudentDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    setSelectedStudentDraft((prev) => {
+      const next = new Set(prev);
+      if (allFilteredSelected) {
+        for (const s of filteredInstitutionStudents) next.delete(s.uid);
+      } else {
+        for (const s of filteredInstitutionStudents) next.add(s.uid);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveSelectedStudents = async () => {
+    if (!profile) return;
+    setSavingStudents(true);
+    try {
+      const validInstitutionUids = new Set(institutionStudents.map((s) => s.uid));
+      const toSave = Array.from(selectedStudentDraft).filter((uid) =>
+        validInstitutionUids.has(uid)
+      );
+      await saveTeacherSelectedStudents(profile.uid, toSave);
+      const savedSet = new Set(toSave);
+      setMembers(
+        institutionStudents
+          .filter((s) => savedSet.has(s.uid))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+      showToast(
+        t('teacher.studentsSavedToast').replace('{count}', String(toSave.length)),
+        'success'
+      );
+    } catch (err) {
+      showToast(t(getFirebaseErrorKey(err)), 'error');
+    } finally {
+      setSavingStudents(false);
+    }
+  };
+
+  const handleRemoveClassStudent = async (uid: string) => {
+    if (!profile) return;
+    setSavingStudents(true);
+    try {
+      const nextList = members.filter((m) => m.uid !== uid).map((m) => m.uid);
+      await saveTeacherSelectedStudents(profile.uid, nextList);
+      setSelectedStudentDraft(new Set(nextList));
+      setMembers((prev) => prev.filter((m) => m.uid !== uid));
+      showToast(
+        t('teacher.studentsSavedToast').replace('{count}', String(nextList.length)),
+        'success'
+      );
+    } catch (err) {
+      showToast(t(getFirebaseErrorKey(err)), 'error');
+    } finally {
+      setSavingStudents(false);
+    }
+  };
+
   const activeMembers = useMemo(() => members.filter((m) => m.status === 'active'), [members]);
-  const pendingMembers = useMemo(() => members.filter((m) => m.status === 'pending'), [members]);
+  const pendingMembers = useMemo(
+    () => fallbackMembers.filter((m) => m.status === 'pending'),
+    [fallbackMembers]
+  );
   const todayLectures = useMemo(
     () => timetable.filter((slot) => slot.dayOfWeek === todayWeekday),
     [timetable, todayWeekday]
@@ -480,6 +617,164 @@ export const ManagerDashboard: React.FC = () => {
                     >
                       {t('teacher.startShort')}
                     </Link>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        {/* All Institution Students Selection + My Class Students */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <section className="lg:col-span-7 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-[#C25E00]" />
+                  <span>{t('teacher.institutionStudentsTitle')}</span>
+                </h3>
+                <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                  {t('teacher.institutionStudentsSubtitle')}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={savingStudents || loading}
+                onClick={handleSaveSelectedStudents}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-4 py-2 text-xs font-medium transition-colors shrink-0"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>
+                  {savingStudents ? t('common.saving') : t('teacher.saveStudentsBtn')}
+                </span>
+              </button>
+            </div>
+
+            {/* Search bar + Select All */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={studentSearch}
+                  onChange={(e) => setStudentSearch(e.target.value)}
+                  placeholder={t('teacher.searchStudentsPlaceholder')}
+                  className="w-full rounded-xl border border-stone-200 dark:border-stone-700 bg-transparent pl-9 pr-3 py-2 text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
+                />
+              </div>
+
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-stone-700 dark:text-stone-300 cursor-pointer select-none shrink-0 px-1">
+                <input
+                  ref={selectAllCheckboxRef}
+                  type="checkbox"
+                  checked={allFilteredSelected}
+                  disabled={filteredInstitutionStudents.length === 0}
+                  onChange={handleToggleSelectAll}
+                  className="h-4 w-4 rounded border-stone-300 dark:border-stone-600 accent-[#C25E00] cursor-pointer"
+                />
+                <span>{t('teacher.selectAll')}</span>
+                <span className="font-mono text-stone-400 tabular-nums">
+                  ({formatNumber(selectedStudentDraft.size)}/{formatNumber(institutionStudents.length)})
+                </span>
+              </label>
+            </div>
+
+            {loading ? (
+              <CardSkeleton rows={4} />
+            ) : filteredInstitutionStudents.length === 0 ? (
+              <p className="text-sm text-stone-500 dark:text-stone-400 py-6 text-center">
+                {institutionStudents.length === 0
+                  ? t('teacher.noInstitutionStudents')
+                  : t('common.noData')}
+              </p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto divide-y divide-stone-100 dark:divide-stone-800 border border-stone-100 dark:border-stone-800 rounded-xl">
+                {filteredInstitutionStudents.map((student) => {
+                  const checked = selectedStudentDraft.has(student.uid);
+                  return (
+                    <label
+                      key={student.uid}
+                      className={`flex items-center gap-3 px-3.5 py-2.5 cursor-pointer transition-colors ${
+                        checked
+                          ? 'bg-amber-50/60 dark:bg-amber-950/20'
+                          : 'hover:bg-stone-50 dark:hover:bg-stone-800/40'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => handleToggleStudent(student.uid)}
+                        className="h-4 w-4 rounded border-stone-300 dark:border-stone-600 accent-[#C25E00] shrink-0 cursor-pointer"
+                      />
+                      <div className="min-w-0 flex-1 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                        <p className="text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
+                          {student.name}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-stone-500 dark:text-stone-400 tabular-nums shrink-0">
+                          <span>
+                            {t('teacher.studentIdLabel')}: {student.memberId || '—'}
+                          </span>
+                          <span>
+                            {t('teacher.rollNoLabel')}: {student.rollNumber || '—'}
+                          </span>
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="lg:col-span-5 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">
+                  {t('teacher.myClassStudentsTitle')} ({formatNumber(members.length)})
+                </h3>
+                <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                  {t('teacher.myClassStudentsSubtitle')}
+                </p>
+              </div>
+              <Link
+                to="/manager/members"
+                className="text-xs font-medium text-[#C25E00] hover:underline shrink-0"
+              >
+                {t('dashboard.viewAll')}
+              </Link>
+            </div>
+
+            {loading ? (
+              <CardSkeleton rows={4} />
+            ) : members.length === 0 ? (
+              <p className="text-sm text-stone-500 dark:text-stone-400 py-6 text-center">
+                {t('teacher.noClassStudentsSelected')}
+              </p>
+            ) : (
+              <div className="max-h-96 overflow-y-auto divide-y divide-stone-100 dark:divide-stone-800">
+                {members.map((student) => (
+                  <div
+                    key={student.uid}
+                    className="py-2.5 flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
+                        {student.name}
+                      </p>
+                      <p className="text-xs font-mono text-stone-500 dark:text-stone-400 tabular-nums mt-0.5">
+                        {student.memberId || '—'} · {t('teacher.rollNoLabel')}:{' '}
+                        {student.rollNumber || '—'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={savingStudents}
+                      onClick={() => handleRemoveClassStudent(student.uid)}
+                      aria-label={t('common.delete')}
+                      className="rounded-lg border border-stone-200 dark:border-stone-700 p-1.5 text-stone-400 hover:text-red-600 hover:border-red-300 dark:hover:border-red-800 disabled:opacity-50 shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>

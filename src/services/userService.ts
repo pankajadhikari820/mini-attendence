@@ -535,3 +535,46 @@ export async function fetchUsersByClass(
     .filter((u) => u.role === 'member')
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * Fetches all registered students (role === 'member') belonging strictly to the given institution.
+ */
+export async function fetchInstitutionStudents(orgId: string): Promise<UserProfile[]> {
+  if (!orgId) return [];
+  return fetchOrgUsers(orgId, 'member');
+}
+
+/**
+ * Persists a teacher's selected class student UIDs on their own user profile in Firestore.
+ */
+export async function saveTeacherSelectedStudents(
+  teacherUid: string,
+  studentUids: string[]
+): Promise<string[]> {
+  const uniqueUids = Array.from(
+    new Set(studentUids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0))
+  );
+  await updateDoc(doc(db, 'users', teacherUid), {
+    selectedStudentUids: uniqueUids,
+  });
+  return uniqueUids;
+}
+
+/**
+ * Resolves a teacher's student/class list:
+ * - If the teacher has saved `selectedStudentUids`, returns ONLY those students (strictly scoped to same institution).
+ * - Otherwise, falls back to the existing assigned/direct members list.
+ */
+export function resolveTeacherStudents(
+  allInstitutionStudents: UserProfile[],
+  teacherProfile: UserProfile,
+  fallbackMembers: UserProfile[]
+): UserProfile[] {
+  if (Array.isArray(teacherProfile.selectedStudentUids)) {
+    const selectedSet = new Set(teacherProfile.selectedStudentUids);
+    return allInstitutionStudents
+      .filter((s) => s.orgId === teacherProfile.orgId && s.role === 'member' && selectedSet.has(s.uid))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+  return fallbackMembers;
+}

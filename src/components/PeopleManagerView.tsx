@@ -21,9 +21,12 @@ import {
   addPersonDirect,
   approvePendingUser,
   deleteUserProfile,
+  fetchInstitutionStudents,
   fetchManagerMembers,
   fetchOrgUsers,
   rejectPendingUser,
+  resolveTeacherStudents,
+  saveTeacherSelectedStudents,
   setUserStatus,
   updateUserDetails,
 } from '../services/userService';
@@ -113,6 +116,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
         ]);
         setPeople(mems);
         setManagers(mgrs.filter((m) => m.status === 'active'));
+      } else if (Array.isArray(profile.selectedStudentUids)) {
+        const allInstStudents = await fetchInstitutionStudents(org.id);
+        setPeople(resolveTeacherStudents(allInstStudents, profile, []));
       } else {
         const list = await fetchManagerMembers(org.id, profile.uid);
         setPeople(list);
@@ -252,7 +258,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
 
       const classMeta = targetRole === 'member' ? buildClassMeta(formClassId) : {};
 
-      const { resetEmailSent } = await addPersonDirect({
+      const { profile: createdProfile, resetEmailSent } = await addPersonDirect({
         org,
         role: targetRole,
         managerId: assignedManagerId,
@@ -265,6 +271,17 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
         ...classMeta,
         actor: profile,
       });
+
+      if (
+        targetRole === 'member' &&
+        !adminViewingAllMembers &&
+        Array.isArray(profile.selectedStudentUids)
+      ) {
+        await saveTeacherSelectedStudents(profile.uid, [
+          ...profile.selectedStudentUids,
+          createdProfile.uid,
+        ]);
+      }
 
       showToast(
         resetEmailSent ? t('people.personAdded') : t('people.personAddedNoEmail'),

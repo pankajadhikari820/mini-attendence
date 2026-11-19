@@ -69,6 +69,8 @@ export interface UserProfile {
   semester?: string;
   section?: string;
   enrolledSubjectIds?: string[];
+  // Teacher's selected institution students for their class list
+  selectedStudentUids?: string[];
   // Parent portal links
   linkedStudentUids?: string[]; // on Parent profile
   parentUids?: string[]; // on Student profile
