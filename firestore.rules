@@ -48,8 +48,10 @@ service cloud.firestore {
     function selectedStudentsFieldValid() {
       return request.resource.data.get('selectedStudentUids', null) == resource.data.get('selectedStudentUids', null)
         || (
-          resource.data.role in ['manager', 'admin', 'super_admin']
+          resource.data.status == 'active'
+          && resource.data.role in ['manager', 'admin', 'super_admin']
           && request.resource.data.selectedStudentUids is list
+          && request.resource.data.selectedStudentUids.size() <= 1000
         );
     }
 

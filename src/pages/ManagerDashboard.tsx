@@ -169,19 +169,23 @@ export const ManagerDashboard: React.FC = () => {
     [profile?.selectedStudentUids]
   );
 
+  const profileRef = React.useRef(profile);
+  profileRef.current = profile;
+
   useEffect(() => {
-    if (!profile) return;
-    const resolved = resolveTeacherStudents(institutionStudents, profile, fallbackMembers);
+    const currentProfile = profileRef.current;
+    if (!currentProfile) return;
+    const resolved = resolveTeacherStudents(institutionStudents, currentProfile, fallbackMembers);
     setMembers(resolved);
-    if (Array.isArray(profile.selectedStudentUids)) {
+    if (Array.isArray(currentProfile.selectedStudentUids)) {
       const validIds = new Set(institutionStudents.map((s) => s.uid));
       setSelectedStudentDraft(
-        new Set(profile.selectedStudentUids.filter((uid) => validIds.has(uid)))
+        new Set(currentProfile.selectedStudentUids.filter((uid) => validIds.has(uid)))
       );
     } else {
       setSelectedStudentDraft(new Set(fallbackMembers.map((m) => m.uid)));
     }
-  }, [institutionStudents, fallbackMembers, profile, savedSelectionKey]);
+  }, [institutionStudents, fallbackMembers, savedSelectionKey]);
 
   const filteredInstitutionStudents = useMemo(() => {
     const q = studentSearch.trim().toLowerCase();
