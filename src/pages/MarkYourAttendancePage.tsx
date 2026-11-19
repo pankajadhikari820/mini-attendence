@@ -27,7 +27,7 @@ import {
 } from '../services/sessionService';
 import {
   getCurrentPosition,
-  getFlatEarthDistanceMeters,
+  getFlatEarthDistanceMetersExact,
   playBeep,
   triggerVibration,
 } from '../utils/helpers';
@@ -60,7 +60,10 @@ export const MarkYourAttendancePage: React.FC = () => {
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [cameraError, setCameraError] = useState('');
   const scannerRef = useRef<Html5Qrcode | null>(null);
-  const scanBusyRef = useRef(false);
+  const submittingRef = useRef(false);
+  const lastScannedTokenRef = useRef<string>('');
+  const lastScannedAtRef = useRef<number>(0);
+  const handleDecodedLiveQRRef = useRef<(raw: string) => void>(() => {});
 
   // Step 2B: Enter ID + Live Code state
   const [enteredId, setEnteredId] = useState('');
@@ -153,21 +156,21 @@ export const MarkYourAttendancePage: React.FC = () => {
     return () => unsub();
   }, [profile, org]);
 
-  // Auto-prune expired sessions in real time while screen stays open
+  // Auto-prune clearly stale sessions while screen stays open (15-min skew guard; real-time onSnapshot closes immediately)
   useEffect(() => {
     if (sessions.length === 0) return;
     const interval = window.setInterval(() => {
-      const now = Date.now();
+      const cutoff = Date.now() - 15 * 60 * 1000;
       setSessions((prev) =>
-        prev.filter((s) => !s.endsAt || s.endsAt.toMillis() > now)
+        prev.filter((s) => !s.endsAt || s.endsAt.toMillis() > cutoff)
       );
-    }, 5000);
+    }, 10000);
     return () => window.clearInterval(interval);
   }, [sessions.length]);
 
-  const distanceMeters = useMemo(() => {
+  const exactDistanceMeters = useMemo(() => {
     if (!session || !gps) return null;
-    return getFlatEarthDistanceMeters(
+    return getFlatEarthDistanceMetersExact(
       gps.lat,
       gps.lng,
       session.location.lat,
@@ -176,13 +179,18 @@ export const MarkYourAttendancePage: React.FC = () => {
     );
   }, [session, gps]);
 
+  const distanceMeters = useMemo(
+    () => (exactDistanceMeters === null ? null : Math.round(exactDistanceMeters)),
+    [exactDistanceMeters]
+  );
+
   const locationRequired = session ? session.locationCheckEnabled : org?.location?.enabled ?? true;
   const locationOk = useMemo(() => {
     if (!locationRequired) return true;
     if (!gps || gpsError) return false;
-    if (distanceMeters === null || !session) return false;
-    return distanceMeters <= session.location.radius;
-  }, [locationRequired, gps, gpsError, distanceMeters, session]);
+    if (exactDistanceMeters === null || !session) return false;
+    return exactDistanceMeters <= session.location.radius;
+  }, [locationRequired, gps, gpsError, exactDistanceMeters, session]);
 
   const stopCamera = useCallback(async () => {
     const inst = scannerRef.current;
@@ -210,61 +218,70 @@ export const MarkYourAttendancePage: React.FC = () => {
 
   const handleSubmitTokenOrCode = useCallback(
     async (mode: 'live_qr' | 'live_code', value: string, scannedSessionId?: string) => {
-      if (!org || !profile) return;
+      if (!org || !profile || submittingRef.current) return;
+      submittingRef.current = true;
+      setSubmitting(true);
       setErrorMessage('');
 
-      let targetSession: AttendanceSession | null = session;
+      try {
+        let targetSession: AttendanceSession | null = session;
 
-      if (mode === 'live_qr' && scannedSessionId) {
-        const matchedFromList = sessions.find((s) => s.id === scannedSessionId) || null;
-        if (matchedFromList) {
-          targetSession = matchedFromList;
-          setSelectedSessionId(matchedFromList.id);
-        } else {
-          setSubmitting(true);
-          const resolved = await resolveScannedSession(scannedSessionId, profile, org);
-          if (resolved.status !== 'ok') {
-            setSubmitting(false);
-            if (resolved.status === 'closed') {
-              reportError(t('mark.errSessionClosed'));
-            } else if (resolved.status === 'unauthorized') {
-              reportError(t('mark.errUnauthorized'));
-            } else if (resolved.status === 'network') {
-              reportError(t('mark.errNetwork'));
-            } else {
-              reportError(t('attendance.invalidQr'));
+        if (mode === 'live_qr' && scannedSessionId) {
+          const matchedFromList = sessions.find((s) => s.id === scannedSessionId) || null;
+          if (matchedFromList) {
+            targetSession = matchedFromList;
+            setSelectedSessionId(matchedFromList.id);
+          } else {
+            const resolved = await resolveScannedSession(scannedSessionId, profile, org);
+            if (resolved.status !== 'ok') {
+              if (resolved.status === 'closed') {
+                reportError(t('mark.errSessionClosed'));
+              } else if (resolved.status === 'unauthorized') {
+                reportError(t('mark.errUnauthorized'));
+              } else if (resolved.status === 'network') {
+                reportError(t('mark.errNetwork'));
+              } else {
+                reportError(t('mark.errInvalidQr'));
+              }
+              return;
             }
+            targetSession = resolved.session;
+            setSessions((prev) =>
+              prev.some((s) => s.id === resolved.session.id)
+                ? prev
+                : [resolved.session, ...prev]
+            );
+            setSelectedSessionId(resolved.session.id);
+          }
+        }
+
+        if (!targetSession) {
+          reportError(t('mark.errSessionClosed'));
+          return;
+        }
+
+        let activeGps = gps;
+        const needsGps = targetSession.locationCheckEnabled;
+        if (needsGps) {
+          if (!activeGps) {
+            // Try a quick GPS lock if camera scanned before initial GPS resolved
+            try {
+              const freshPos = await getCurrentPosition();
+              activeGps = freshPos;
+              setGps(freshPos);
+              setGpsError(freshPos.accuracy > 100 ? 'low_accuracy' : null);
+            } catch {
+              setGpsError('denied');
+              reportError(t('mark.locationDenied'));
+              return;
+            }
+          }
+          if (activeGps.accuracy > 100) {
+            reportError(t('mark.lowAccuracy'));
             return;
           }
-          targetSession = resolved.session;
-          setSessions((prev) =>
-            prev.some((s) => s.id === resolved.session.id)
-              ? prev
-              : [resolved.session, ...prev]
-          );
-          setSelectedSessionId(resolved.session.id);
         }
-      }
 
-      if (!targetSession) {
-        reportError(t('mark.errSessionClosed'));
-        return;
-      }
-
-      const needsGps = targetSession.locationCheckEnabled;
-      if (needsGps) {
-        if (!gps) {
-          reportError(t('mark.locationDenied'));
-          return;
-        }
-        if (gps.accuracy > 100) {
-          reportError(t('mark.lowAccuracy'));
-          return;
-        }
-      }
-
-      setSubmitting(true);
-      try {
         const res = await submitSelfAttendance({
           org,
           profile,
@@ -272,9 +289,9 @@ export const MarkYourAttendancePage: React.FC = () => {
           method: mode,
           token: mode === 'live_qr' ? value : undefined,
           code: mode === 'live_code' ? value : undefined,
-          lat: gps?.lat ?? 0,
-          lng: gps?.lng ?? 0,
-          accuracy: gps?.accuracy ?? 0,
+          lat: activeGps?.lat ?? 0,
+          lng: activeGps?.lng ?? 0,
+          accuracy: activeGps?.accuracy ?? 0,
         });
 
         if (res.ok) {
@@ -288,6 +305,7 @@ export const MarkYourAttendancePage: React.FC = () => {
           reportError(t(key));
         }
       } finally {
+        submittingRef.current = false;
         setSubmitting(false);
       }
     },
@@ -296,7 +314,9 @@ export const MarkYourAttendancePage: React.FC = () => {
 
   const handleDecodedLiveQR = useCallback(
     async (raw: string) => {
-      if (scanBusyRef.current) return;
+      if (submittingRef.current) return;
+
+      const now = Date.now();
       let parsed: LiveSessionQRPayload;
       try {
         const obj = JSON.parse(raw);
@@ -305,33 +325,45 @@ export const MarkYourAttendancePage: React.FC = () => {
           typeof obj.s !== 'string' ||
           obj.s.trim().length < 4 ||
           typeof obj.t !== 'string' ||
-          obj.t.trim().length < 16
+          obj.t.trim().length < 32
         ) {
-          scanBusyRef.current = true;
-          reportError(t('attendance.invalidQr'));
-          window.setTimeout(() => {
-            scanBusyRef.current = false;
-          }, 1500);
+          if (lastScannedTokenRef.current === raw && now - lastScannedAtRef.current < 2500) {
+            return;
+          }
+          lastScannedTokenRef.current = raw;
+          lastScannedAtRef.current = now;
+          reportError(t('mark.errInvalidQr'));
           return;
         }
         parsed = { s: obj.s.trim(), t: obj.t.trim() };
       } catch {
-        scanBusyRef.current = true;
-        reportError(t('attendance.invalidQr'));
-        window.setTimeout(() => {
-          scanBusyRef.current = false;
-        }, 1500);
+        if (lastScannedTokenRef.current === raw && now - lastScannedAtRef.current < 2500) {
+          return;
+        }
+        lastScannedTokenRef.current = raw;
+        lastScannedAtRef.current = now;
+        reportError(t('mark.errInvalidQr'));
         return;
       }
 
-      scanBusyRef.current = true;
+      // Throttle exact same QR token for 2.5s after a failed attempt,
+      // while allowing an immediate scan as soon as a newly rotated token appears!
+      const tokenKey = `${parsed.s}:${parsed.t}`;
+      if (lastScannedTokenRef.current === tokenKey && now - lastScannedAtRef.current < 2500) {
+        return;
+      }
+      lastScannedTokenRef.current = tokenKey;
+      lastScannedAtRef.current = now;
+
       await handleSubmitTokenOrCode('live_qr', parsed.t, parsed.s);
-      window.setTimeout(() => {
-        scanBusyRef.current = false;
-      }, 1500);
     },
     [handleSubmitTokenOrCode, reportError, t]
   );
+
+  // Always point the Html5Qrcode camera callback at the latest handleDecodedLiveQR (eliminates stale closure)
+  useEffect(() => {
+    handleDecodedLiveQRRef.current = handleDecodedLiveQR;
+  }, [handleDecodedLiveQR]);
 
   const startCamera = useCallback(
     async (mode: 'environment' | 'user' = facingMode) => {
@@ -350,7 +382,7 @@ export const MarkYourAttendancePage: React.FC = () => {
       };
 
       const onScanSuccess = (text: string) => {
-        handleDecodedLiveQR(text);
+        handleDecodedLiveQRRef.current(text);
       };
 
       try {
@@ -380,7 +412,7 @@ export const MarkYourAttendancePage: React.FC = () => {
         setCameraRunning(false);
       }
     },
-    [facingMode, stopCamera, handleDecodedLiveQR, t]
+    [facingMode, stopCamera, t]
   );
 
   const handleSwitchCamera = async () => {

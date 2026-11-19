@@ -4,7 +4,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  increment,
   onSnapshot,
   query,
   runTransaction,
@@ -22,13 +21,14 @@ import type {
   AttendanceStatus,
   FacultyAssignment,
   Organization,
+  SessionSecret,
   TimetableSlot,
   UserProfile,
 } from '../types';
 import {
   generateSessionToken,
   generateSixDigitCode,
-  getFlatEarthDistanceMeters,
+  getFlatEarthDistanceMetersExact,
   getOrgDateString,
   getOrgTimeHHMM,
   getOrCreateDeviceId,
@@ -36,6 +36,10 @@ import {
 } from '../utils/helpers';
 import { buildSessionAttendanceDocId } from './attendanceService';
 import { recordAuditLog } from './auditService';
+
+// Tolerance for local client clock skew when filtering status === 'open' sessions on the client.
+// Authoritative expiry (`request.time <= sess.endsAt`) is always enforced by Firestore server rules.
+const CLIENT_CLOCK_SKEW_TOLERANCE_MS = 15 * 60 * 1000;
 
 /**
  * Starts a new Live Attendance Session scoped to a specific subject, class, semester,
@@ -67,7 +71,7 @@ export async function startAttendanceSession(params: {
   classroom?: string;
   roomNumber?: string;
   timetableSlotId?: string | null;
-}): Promise<{ session: AttendanceSession; token: string; code: string }> {
+}): Promise<{ session: AttendanceSession; token: string; code: string; issuedAtMs: number }> {
   // Check for duplicate active session by this owner for the exact same subject/slot
   const openMine = await fetchOpenSessionsByOwner(params.org.id, params.owner.uid);
   const targetSlotId = params.timetableSlot?.id || params.timetableSlotId || '';
@@ -86,7 +90,12 @@ export async function startAttendanceSession(params: {
   if (duplicate) {
     // Re-attach cleanly instead of creating duplicate conflicting sessions
     const fresh = await rotateSessionSecret({ sessionId: duplicate.id });
-    return { session: duplicate, token: fresh.token, code: fresh.code };
+    return {
+      session: duplicate,
+      token: fresh.token,
+      code: fresh.code,
+      issuedAtMs: fresh.issuedAtMs,
+    };
   }
 
   const sessionRef = doc(collection(db, 'sessions'));
@@ -168,6 +177,7 @@ export async function startAttendanceSession(params: {
     endsAt,
   };
 
+  const writeStartedMs = Date.now();
   const batch = writeBatch(db);
   batch.set(sessionRef, sessionPayload);
   batch.set(doc(db, 'sessionSecrets', sessionId), {
@@ -176,12 +186,16 @@ export async function startAttendanceSession(params: {
     active: true,
     token,
     code,
+    prevToken: '',
+    prevCode: '',
+    prevTokenUpdatedAt: null,
     rotationSeq: 1,
     tokenUpdatedAt: serverTimestamp(),
   });
   await batch.commit();
 
-  await recordAuditLog({
+  // Fire audit log non-blocking so the fresh QR code is displayed immediately without eating into its 10s window
+  void recordAuditLog({
     actor: params.owner,
     action: 'session.started',
     targetCollection: 'sessions',
@@ -192,7 +206,7 @@ export async function startAttendanceSession(params: {
       subjectId: subjectId || null,
       durationMinutes: params.durationMinutes,
     },
-  });
+  }).catch(() => {});
 
   return {
     session: {
@@ -202,28 +216,104 @@ export async function startAttendanceSession(params: {
     },
     token,
     code,
+    issuedAtMs: writeStartedMs,
   };
 }
 
 /**
- * Rotates the live session's QR token & 6-digit code every 10 seconds.
- * Immediately overwrites and invalidates the previous token on the server.
+ * Rotates the live session's QR token & 6-digit code every 10 seconds inside an atomic
+ * Firestore transaction. Shifts the previous server-committed token/code into `prevToken`/`prevCode`
+ * (strictly verified by firestore.rules) so students whose scan was already in flight right across
+ * a 10-second rotation boundary succeed reliably, while older tokens remain strictly rejected.
  */
 export async function rotateSessionSecret(params: {
   sessionId: string;
-}): Promise<{ token: string; code: string }> {
+}): Promise<{ token: string; code: string; issuedAtMs: number }> {
   const token = generateSessionToken();
   const code = generateSixDigitCode();
+  const secretRef = doc(db, 'sessionSecrets', params.sessionId);
+  const writeStartedMs = Date.now();
 
-  await updateDoc(doc(db, 'sessionSecrets', params.sessionId), {
-    active: true,
-    token,
-    code,
-    rotationSeq: increment(1),
-    tokenUpdatedAt: serverTimestamp(),
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(secretRef);
+    if (!snap.exists()) {
+      throw new Error('SESSION_SECRET_MISSING');
+    }
+    const cur = snap.data() as SessionSecret;
+    if (cur.active === false) {
+      throw new Error('SESSION_SECRET_CLOSED');
+    }
+
+    const canCarryPrev =
+      typeof cur.token === 'string' &&
+      cur.token.length >= 32 &&
+      typeof cur.code === 'string' &&
+      cur.code.length === 6 &&
+      !!cur.tokenUpdatedAt;
+
+    tx.update(secretRef, {
+      active: true,
+      token,
+      code,
+      prevToken: canCarryPrev ? cur.token : '',
+      prevCode: canCarryPrev ? cur.code : '',
+      prevTokenUpdatedAt: canCarryPrev ? cur.tokenUpdatedAt : null,
+      rotationSeq: (typeof cur.rotationSeq === 'number' ? cur.rotationSeq : 0) + 1,
+      tokenUpdatedAt: serverTimestamp(),
+    });
   });
 
-  return { token, code };
+  return { token, code, issuedAtMs: writeStartedMs };
+}
+
+/**
+ * Owner-only real-time listener on `sessionSecrets/{sessionId}`.
+ * Ignores local uncommitted writes (`hasPendingWrites`) so the projector always reflects
+ * the authoritative server-committed token and never displays an uncommitted QR on slow networks.
+ */
+export function subscribeSessionSecret(
+  sessionId: string,
+  callback: (secret: SessionSecret | null) => void,
+  onError?: (err: unknown) => void
+): () => void {
+  return onSnapshot(
+    doc(db, 'sessionSecrets', sessionId),
+    (snap) => {
+      if (snap.metadata.hasPendingWrites) return;
+      if (!snap.exists()) {
+        callback(null);
+      } else {
+        callback(snap.data() as SessionSecret);
+      }
+    },
+    (err) => {
+      onError?.(err);
+    }
+  );
+}
+
+/**
+ * Guards against teacher device clock skew: once Firestore confirms the server `startedAt`
+ * timestamp on a newly opened session, corrects `endsAt` if the teacher's local clock was
+ * off by more than 30 seconds so `request.time <= sess.endsAt` never rejects valid scans.
+ */
+export async function syncSessionEndsAtToServerClock(
+  sessionId: string,
+  serverStartedAt: Timestamp,
+  currentEndsAt: Timestamp | null | undefined,
+  durationMinutes: number
+): Promise<Timestamp | null> {
+  const expectedEndsMs = serverStartedAt.toMillis() + Math.max(1, durationMinutes) * 60 * 1000;
+  const currentEndsMs = currentEndsAt?.toMillis?.() ?? 0;
+  // Only adjust if drift is > 30s and the session has not been manually extended past expectedEndsMs
+  if (expectedEndsMs - currentEndsMs > 30_000) {
+    const corrected = Timestamp.fromMillis(expectedEndsMs);
+    await updateDoc(doc(db, 'sessions', sessionId), {
+      endsAt: corrected,
+    });
+    return corrected;
+  }
+  return null;
 }
 
 export async function extendAttendanceSession(
@@ -241,8 +331,8 @@ export async function extendAttendanceSession(
 }
 
 /**
- * Stops a live attendance session and immediately invalidates its active secret
- * atomically so no further QR scans can succeed.
+ * Stops a live attendance session and immediately wipes both current and previous
+ * secrets atomically so no further QR scans can succeed.
  */
 export async function closeAttendanceSession(
   sessionId: string,
@@ -257,18 +347,21 @@ export async function closeAttendanceSession(
     active: false,
     token: '',
     code: '',
+    prevToken: '',
+    prevCode: '',
+    prevTokenUpdatedAt: null,
     tokenUpdatedAt: serverTimestamp(),
   });
   await batch.commit();
 
   if (actor) {
-    await recordAuditLog({
+    void recordAuditLog({
       actor,
       action: 'session.closed',
       targetCollection: 'sessions',
       targetId: sessionId,
       summary: `Closed live attendance session ${sessionId.slice(0, 8)}`,
-    });
+    }).catch(() => {});
   }
 }
 
@@ -361,9 +454,9 @@ export function isAuthorizedForSession(
   // Admin -> Manager session
   if (session.ownerRole === 'admin' && profile.role === 'manager') return true;
 
-  // Multi-teacher class/section session -> Student assigned to that class
+  // Multi-teacher or Admin-led class/section session -> Student assigned to that class
   if (
-    session.ownerRole === 'manager' &&
+    (session.ownerRole === 'manager' || session.ownerRole === 'admin') &&
     profile.role === 'member' &&
     session.classId &&
     profile.classId &&
@@ -465,7 +558,7 @@ export async function findEligibleLiveSessions(
           };
           if (
             s.status === 'open' &&
-            (s.endsAt?.toMillis?.() ?? 0) > nowMs &&
+            (s.endsAt?.toMillis?.() ?? Infinity) > nowMs - CLIENT_CLOCK_SKEW_TOLERANCE_MS &&
             isAuthorizedForSession(profile, org, s)
           ) {
             map.set(s.id, s);
@@ -549,7 +642,7 @@ export function subscribeEligibleLiveSessions(
       for (const [id, sess] of bucket.entries()) {
         if (
           sess.status === 'open' &&
-          (sess.endsAt?.toMillis?.() ?? 0) > nowMs &&
+          (sess.endsAt?.toMillis?.() ?? Infinity) > nowMs - CLIENT_CLOCK_SKEW_TOLERANCE_MS &&
           isAuthorizedForSession(profile, org, sess)
         ) {
           merged.set(id, sess);
@@ -629,7 +722,9 @@ export async function resolveScannedSession(
     if (!isAuthorizedForSession(profile, org, sess)) {
       return { status: 'unauthorized' };
     }
-    if (sess.status !== 'open' || (sess.endsAt?.toMillis?.() ?? 0) <= Date.now()) {
+    // Do not reject an 'open' session based on local device clock skew —
+    // Firestore server rules (`request.time <= sess.endsAt`) enforce expiry authoritatively.
+    if (sess.status !== 'open') {
       return { status: 'closed' };
     }
     return { status: 'ok', session: sess };
@@ -732,6 +827,7 @@ export async function logFailedAttempt(params: {
 
 export type SelfMarkErrorCode =
   | 'errExpired'
+  | 'errInvalidQr'
   | 'errInvalidCode'
   | 'errOutsideArea'
   | 'errSessionClosed'
@@ -759,7 +855,8 @@ export interface SelfMarkResult {
  *   preventing duplicate attendance within the same session.
  * - Atomically writes `sessionDevices/{sessionId}_{deviceId}` and `attendance/{recordId}`.
  * - Backend `firestore.rules` authoritatively validates role/class eligibility, open session,
- *   exact current token/code within strictly 10 seconds on `request.time`, GPS radius, and device lock.
+ *   rotating token/code against server `request.time` (with 5s rotation-boundary handoff),
+ *   exact GPS radius, and one-device-per-session lock.
  */
 export async function submitSelfAttendance(params: {
   org: Organization;
@@ -782,21 +879,33 @@ export async function submitSelfAttendance(params: {
     return { ok: false, errorCode: 'errUnauthorized' };
   }
 
-  const distanceMeters = getFlatEarthDistanceMeters(
+  const cleanToken = (params.token || '').trim();
+  const cleanCode = (params.code || '').replace(/\s+/g, '');
+
+  if (method === 'live_qr' && cleanToken.length < 32) {
+    return { ok: false, errorCode: 'errInvalidQr' };
+  }
+  if (method === 'live_code' && !/^\d{6}$/.test(cleanCode)) {
+    return { ok: false, errorCode: 'errInvalidCode' };
+  }
+
+  // Exact unrounded flat-earth distance matches Firestore rule `flatEarthDistanceOk`
+  const exactDistanceMeters = getFlatEarthDistanceMetersExact(
     lat,
     lng,
     session.location.lat,
     session.location.lng,
     session.location.cosLat
   );
+  const distanceMeters = Math.round(exactDistanceMeters);
 
-  // Fast client pre-check for immediate feedback + attempt logging (enforced again on server)
-  if (session.status !== 'open' || (session.endsAt?.toMillis?.() ?? 0) <= Date.now()) {
+  // Pre-check status only (never reject an 'open' session on local device clock skew)
+  if (session.status !== 'open') {
     return { ok: false, errorCode: 'errSessionClosed' };
   }
 
-  if (session.locationCheckEnabled && distanceMeters > session.location.radius) {
-    await logFailedAttempt({
+  if (session.locationCheckEnabled && exactDistanceMeters > session.location.radius) {
+    void logFailedAttempt({
       orgId: org.id,
       sessionId: session.id,
       ownerUid: session.ownerUid,
@@ -831,9 +940,29 @@ export async function submitSelfAttendance(params: {
       if (!sessSnap.exists()) {
         throw new Error('TX_SESSION_CLOSED');
       }
-      const liveSess = sessSnap.data() as AttendanceSession;
-      if (liveSess.status !== 'open' || (liveSess.endsAt?.toMillis?.() ?? 0) <= Date.now()) {
+      const liveSess = {
+        ...(sessSnap.data() as Omit<AttendanceSession, 'id'>),
+        id: sessSnap.id,
+      };
+      if (liveSess.status !== 'open') {
         throw new Error('TX_SESSION_CLOSED');
+      }
+
+      if (!isAuthorizedForSession(profile, org, liveSess)) {
+        throw new Error('TX_UNAUTHORIZED');
+      }
+
+      if (liveSess.locationCheckEnabled) {
+        const liveExactDist = getFlatEarthDistanceMetersExact(
+          lat,
+          lng,
+          liveSess.location.lat,
+          liveSess.location.lng,
+          liveSess.location.cosLat
+        );
+        if (liveExactDist > liveSess.location.radius) {
+          throw new Error('TX_OUTSIDE_AREA');
+        }
       }
 
       if (attSnap.exists()) {
@@ -859,22 +988,22 @@ export async function submitSelfAttendance(params: {
         personMemberId: profile.memberId,
         role: profile.role === 'manager' ? 'manager' : 'member',
         managerId: profile.managerId || null,
-        teacherUid: session.ownerUid,
-        teacherName: session.ownerName,
-        ...(session.departmentId ? { departmentId: session.departmentId } : {}),
-        ...(session.classId
+        teacherUid: liveSess.ownerUid,
+        teacherName: liveSess.ownerName,
+        ...(liveSess.departmentId ? { departmentId: liveSess.departmentId } : {}),
+        ...(liveSess.classId
           ? {
-              classId: session.classId,
-              className: session.className || '',
-              semester: session.semester || '',
-              section: session.section || '',
+              classId: liveSess.classId,
+              className: liveSess.className || '',
+              semester: liveSess.semester || '',
+              section: liveSess.section || '',
             }
           : {}),
-        ...(session.subjectId
+        ...(liveSess.subjectId
           ? {
-              subjectId: session.subjectId,
-              subjectName: session.subjectName || '',
-              subjectCode: session.subjectCode || '',
+              subjectId: liveSess.subjectId,
+              subjectName: liveSess.subjectName || '',
+              subjectCode: liveSess.subjectCode || '',
             }
           : {}),
         date,
@@ -889,12 +1018,13 @@ export async function submitSelfAttendance(params: {
         accuracy,
         distanceMeters,
         deviceId,
-        ...(method === 'live_qr' ? { submittedToken: params.token || '' } : {}),
-        ...(method === 'live_code' ? { submittedCode: params.code || '' } : {}),
+        ...(method === 'live_qr' ? { submittedToken: cleanToken } : {}),
+        ...(method === 'live_code' ? { submittedCode: cleanCode } : {}),
       });
     });
 
-    await recordAuditLog({
+    // Record audit trail asynchronously so confirmation UI appears instantly
+    void recordAuditLog({
       actor: profile,
       action: 'attendance.created',
       targetCollection: 'attendance',
@@ -906,7 +1036,7 @@ export async function submitSelfAttendance(params: {
         classId: session.classId || null,
         distanceMeters,
       },
-    });
+    }).catch(() => {});
 
     return {
       ok: true,
@@ -922,11 +1052,25 @@ export async function submitSelfAttendance(params: {
     if (message === 'TX_SESSION_CLOSED') {
       return { ok: false, errorCode: 'errSessionClosed' };
     }
+    if (message === 'TX_UNAUTHORIZED') {
+      return { ok: false, errorCode: 'errUnauthorized' };
+    }
+    if (message === 'TX_OUTSIDE_AREA') {
+      void logFailedAttempt({
+        orgId: org.id,
+        sessionId: session.id,
+        ownerUid: session.ownerUid,
+        person: profile,
+        reason: 'outside_radius',
+        distance: distanceMeters,
+      });
+      return { ok: false, errorCode: 'errOutsideArea', distanceMeters };
+    }
     if (message === 'TX_ALREADY_MARKED') {
       return { ok: false, errorCode: 'errAlreadyMarked' };
     }
     if (message === 'TX_DEVICE_USED') {
-      await logFailedAttempt({
+      void logFailedAttempt({
         orgId: org.id,
         sessionId: session.id,
         ownerUid: session.ownerUid,
@@ -937,7 +1081,12 @@ export async function submitSelfAttendance(params: {
       return { ok: false, errorCode: 'errDeviceUsed' };
     }
 
-    if (!navigator.onLine || codeErr === 'unavailable' || codeErr === 'deadline-exceeded') {
+    if (
+      !navigator.onLine ||
+      codeErr === 'unavailable' ||
+      codeErr === 'deadline-exceeded' ||
+      codeErr === 'aborted'
+    ) {
       return { ok: false, errorCode: 'errNetwork' };
     }
 
@@ -952,7 +1101,7 @@ export async function submitSelfAttendance(params: {
           return { ok: false, errorCode: 'errAlreadyMarked' };
         }
         if (devSnap.exists()) {
-          await logFailedAttempt({
+          void logFailedAttempt({
             orgId: org.id,
             sessionId: session.id,
             ownerUid: session.ownerUid,
@@ -962,17 +1111,52 @@ export async function submitSelfAttendance(params: {
           });
           return { ok: false, errorCode: 'errDeviceUsed' };
         }
-        if (sessSnap.exists()) {
-          const s = sessSnap.data() as AttendanceSession;
-          if (s.status !== 'open' || (s.endsAt?.toMillis?.() ?? 0) <= Date.now()) {
-            return { ok: false, errorCode: 'errSessionClosed' };
+        if (!sessSnap.exists()) {
+          return { ok: false, errorCode: 'errSessionClosed' };
+        }
+        const s: AttendanceSession = {
+          ...(sessSnap.data() as Omit<AttendanceSession, 'id'>),
+          id: sessSnap.id,
+        };
+        if (s.status !== 'open') {
+          return { ok: false, errorCode: 'errSessionClosed' };
+        }
+        if (!isAuthorizedForSession(profile, org, s)) {
+          return { ok: false, errorCode: 'errUnauthorized' };
+        }
+        if (s.locationCheckEnabled) {
+          const liveExactDist = getFlatEarthDistanceMetersExact(
+            lat,
+            lng,
+            s.location.lat,
+            s.location.lng,
+            s.location.cosLat
+          );
+          if (liveExactDist > s.location.radius) {
+            void logFailedAttempt({
+              orgId: org.id,
+              sessionId: session.id,
+              ownerUid: session.ownerUid,
+              person: profile,
+              reason: 'outside_radius',
+              distance: Math.round(liveExactDist),
+            });
+            return {
+              ok: false,
+              errorCode: 'errOutsideArea',
+              distanceMeters: Math.round(liveExactDist),
+            };
           }
+        }
+        // Only classify as closed on local endsAt if clearly past end time (> 60s ago)
+        if ((s.endsAt?.toMillis?.() ?? Infinity) <= Date.now() - 60_000) {
+          return { ok: false, errorCode: 'errSessionClosed' };
         }
       } catch {
         // Proceed to expired/invalid secret classification
       }
 
-      await logFailedAttempt({
+      void logFailedAttempt({
         orgId: org.id,
         sessionId: session.id,
         ownerUid: session.ownerUid,

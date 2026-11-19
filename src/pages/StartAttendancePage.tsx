@@ -34,6 +34,8 @@ import {
   subscribeSession,
   subscribeSessionAttendance,
   subscribeSessionAttempts,
+  subscribeSessionSecret,
+  syncSessionEndsAtToServerClock,
 } from '../services/sessionService';
 import {
   subscribeFacultyAssignments,
@@ -92,6 +94,7 @@ export const StartAttendancePage: React.FC = () => {
   const [currentCode, setCurrentCode] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(ROTATION_SECONDS);
   const [rotating, setRotating] = useState(false);
+  const [rotationSyncError, setRotationSyncError] = useState(false);
   const [sessionRemainingSec, setSessionRemainingSec] = useState(0);
   const [markedRecords, setMarkedRecords] = useState<AttendanceRecord[]>([]);
   const [attempts, setAttempts] = useState<AttendanceAttempt[]>([]);
@@ -102,6 +105,10 @@ export const StartAttendancePage: React.FC = () => {
   const tokenIssuedAtMsRef = useRef<number>(Date.now());
   const endsAtMsRef = useRef<number>(0);
   const isRotatingRef = useRef<boolean>(false);
+  const nextRetryAtMsRef = useRef<number>(0);
+  const clockSyncedSessionIdRef = useRef<string>('');
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
   const projectorRef = useRef<HTMLDivElement | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
 
@@ -230,8 +237,10 @@ export const StartAttendancePage: React.FC = () => {
 
   const attachToOpenSession = useCallback(async (existing: AttendanceSession) => {
     const fresh = await rotateSessionSecret({ sessionId: existing.id });
-    tokenIssuedAtMsRef.current = Date.now();
+    tokenIssuedAtMsRef.current = fresh.issuedAtMs;
+    nextRetryAtMsRef.current = 0;
     endsAtMsRef.current = existing.endsAt?.toMillis?.() ?? 0;
+    setRotationSyncError(false);
     setCurrentToken(fresh.token);
     setCurrentCode(fresh.code);
     setSecondsLeft(ROTATION_SECONDS);
@@ -239,14 +248,16 @@ export const StartAttendancePage: React.FC = () => {
     setActiveSession(existing);
   }, []);
 
-  // On mount: check for already open sessions by this teacher/admin
+  // On mount: check for already open sessions by this teacher/admin (keyed on stable primitive IDs)
+  const orgId = org?.id || '';
+  const profileUid = profile?.uid || '';
   useEffect(() => {
-    if (!org || !profile) return;
+    if (!orgId || !profileUid) return;
     let mounted = true;
 
     const init = async () => {
       try {
-        const openList = await fetchOpenSessionsByOwner(org.id, profile.uid);
+        const openList = await fetchOpenSessionsByOwner(orgId, profileUid);
         if (!mounted) return;
         setOtherOpenSessions(openList);
 
@@ -265,31 +276,66 @@ export const StartAttendancePage: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [org, profile, paramSlotId, paramAssignmentId, attachToOpenSession, refreshGPS]);
+  }, [orgId, profileUid, paramSlotId, paramAssignmentId, attachToOpenSession, refreshGPS]);
 
-  // Subscribe to session doc, attendance list, and rejected attempts while active
+  // Subscribe to session doc, owner-only sessionSecrets doc, attendance list, and rejected attempts while active
   useEffect(() => {
-    if (!activeSession?.id || !org) return;
+    if (!activeSession?.id || !orgId) return;
     const sessionId = activeSession.id;
+
     const unsubSess = subscribeSession(sessionId, (s) => {
       if (!s || s.status === 'closed') {
         setCurrentToken('');
         setCurrentCode('');
+        setRotationSyncError(false);
         setActiveSession(null);
       } else {
         endsAtMsRef.current = s.endsAt?.toMillis?.() ?? endsAtMsRef.current;
         setActiveSession(s);
+
+        // Self-correct endsAt once if the teacher's device clock was skewed relative to Firestore server time
+        if (s.startedAt && clockSyncedSessionIdRef.current !== sessionId) {
+          clockSyncedSessionIdRef.current = sessionId;
+          syncSessionEndsAtToServerClock(
+            sessionId,
+            s.startedAt,
+            s.endsAt,
+            s.durationMinutes || 45
+          )
+            .then((corrected) => {
+              if (corrected) {
+                endsAtMsRef.current = corrected.toMillis();
+              }
+            })
+            .catch(() => {});
+        }
       }
     });
-    const unsubAtt = subscribeSessionAttendance(org.id, sessionId, setMarkedRecords);
-    const unsubAttempts = subscribeSessionAttempts(org.id, sessionId, setAttempts);
+
+    // Keep projector synced to server-confirmed secret (ignores local pending writes)
+    const unsubSecret = subscribeSessionSecret(sessionId, (secret) => {
+      if (!secret || !secret.active) {
+        setCurrentToken('');
+        setCurrentCode('');
+        return;
+      }
+      if (secret.token && secret.code) {
+        setCurrentToken(secret.token);
+        setCurrentCode(secret.code);
+        setRotationSyncError(false);
+      }
+    });
+
+    const unsubAtt = subscribeSessionAttendance(orgId, sessionId, setMarkedRecords);
+    const unsubAttempts = subscribeSessionAttempts(orgId, sessionId, setAttempts);
 
     return () => {
       unsubSess();
+      unsubSecret();
       unsubAtt();
       unsubAttempts();
     };
-  }, [activeSession?.id, org]);
+  }, [activeSession?.id, orgId]);
 
   // Screen Wake Lock API while a session is live
   useEffect(() => {
@@ -328,12 +374,13 @@ export const StartAttendancePage: React.FC = () => {
     };
   }, [activeSession?.id]);
 
-  // Wall-clock synchronized 10-second QR & 6-digit code rotation timer + session countdown
+  // Synchronized 10-second QR & 6-digit code rotation timer + session countdown
   useEffect(() => {
     if (!activeSession?.id) return;
     const sessionId = activeSession.id;
     let aborted = false;
     isRotatingRef.current = false;
+    nextRetryAtMsRef.current = 0;
 
     const tickLoop = async () => {
       if (aborted) return;
@@ -349,7 +396,7 @@ export const StartAttendancePage: React.FC = () => {
         setCurrentToken('');
         setCurrentCode('');
         try {
-          await closeAttendanceSession(sessionId, profile);
+          await closeAttendanceSession(sessionId, profileRef.current);
         } catch {
           // Ignore
         }
@@ -361,18 +408,32 @@ export const StartAttendancePage: React.FC = () => {
       const left = Math.max(0, Math.ceil(ROTATION_SECONDS - elapsedSec));
       setSecondsLeft(left);
 
-      if (elapsedSec >= 9.6 && !isRotatingRef.current) {
+      // Start rotating at 9.2s from writeStartedMs so the next server-committed QR lands right at ~10s
+      if (elapsedSec >= 9.2 && !isRotatingRef.current && now >= nextRetryAtMsRef.current) {
         isRotatingRef.current = true;
         setRotating(true);
         try {
           const next = await rotateSessionSecret({ sessionId });
           if (aborted) return;
-          tokenIssuedAtMsRef.current = Date.now();
+          tokenIssuedAtMsRef.current = next.issuedAtMs;
+          nextRetryAtMsRef.current = 0;
+          setRotationSyncError(false);
           setCurrentToken(next.token);
           setCurrentCode(next.code);
           setSecondsLeft(ROTATION_SECONDS);
-        } catch {
-          // Retry on next tick
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : '';
+          if (msg === 'SESSION_SECRET_CLOSED' || msg === 'SESSION_SECRET_MISSING') {
+            aborted = true;
+            window.clearInterval(interval);
+            setCurrentToken('');
+            setCurrentCode('');
+            setActiveSession(null);
+            return;
+          }
+          // Temporary network hiccup: warn teacher and retry after 1.5s
+          nextRetryAtMsRef.current = Date.now() + 1500;
+          if (!aborted) setRotationSyncError(true);
         } finally {
           isRotatingRef.current = false;
           if (!aborted) setRotating(false);
@@ -386,7 +447,7 @@ export const StartAttendancePage: React.FC = () => {
       isRotatingRef.current = false;
       window.clearInterval(interval);
     };
-  }, [activeSession?.id, profile]);
+  }, [activeSession?.id]);
 
   useEffect(() => {
     const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -434,7 +495,7 @@ export const StartAttendancePage: React.FC = () => {
         title.trim() ||
         (src ? `${src.subjectName} — ${src.className}` : t('session.startTitle'));
 
-      const { session, token, code } = await startAttendanceSession({
+      const { session, token, code, issuedAtMs } = await startAttendanceSession({
         org,
         owner: profile,
         title: computedTitle,
@@ -454,8 +515,11 @@ export const StartAttendancePage: React.FC = () => {
         classroom: selectedSlot?.classroom || '',
         timetableSlotId: selectedSlot?.id || null,
       });
-      tokenIssuedAtMsRef.current = Date.now();
+      tokenIssuedAtMsRef.current = issuedAtMs;
+      nextRetryAtMsRef.current = 0;
+      clockSyncedSessionIdRef.current = '';
       endsAtMsRef.current = session.endsAt?.toMillis?.() ?? Date.now() + duration * 60 * 1000;
+      setRotationSyncError(false);
       setCurrentToken(token);
       setCurrentCode(code);
       setSecondsLeft(ROTATION_SECONDS);
@@ -670,10 +734,18 @@ export const StartAttendancePage: React.FC = () => {
               </div>
 
               <div className="mt-5 flex items-center justify-center gap-3 text-sm text-stone-600 dark:text-stone-300 tabular-nums">
-                <span>{rotating ? t('session.rotatingToken') : t('session.rotatesIn')}</span>
+                <span>
+                  {rotationSyncError
+                    ? t('session.syncingQr')
+                    : rotating
+                    ? t('session.rotatingToken')
+                    : t('session.rotatesIn')}
+                </span>
                 <span
                   className={`font-mono text-xl font-bold px-2.5 py-0.5 rounded-lg border ${
-                    secondsLeft <= 3
+                    rotationSyncError
+                      ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300'
+                      : secondsLeft <= 3
                       ? 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300'
                       : 'border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 text-stone-900 dark:text-stone-50'
                   }`}

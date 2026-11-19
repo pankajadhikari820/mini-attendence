@@ -60,14 +60,14 @@ service cloud.firestore {
       return myUser().orgId == sess.orgId && (
         // Admin -> Manager session
         (sess.ownerRole == 'admin' && myUser().role == 'manager')
-        // Multi-teacher class/subject session -> Students assigned to that classId
+        // Multi-teacher or Admin-led class/subject session -> Students assigned to that classId
         || (
-          sess.ownerRole == 'manager'
+          sess.ownerRole in ['admin', 'manager']
           && myUser().role == 'member'
           && 'classId' in sess && sess.classId is string && sess.classId != ''
           && 'classId' in myUser() && myUser().classId == sess.classId
         )
-        // Legacy direct manager -> member session (when session has no classId or student has direct managerId)
+        // Legacy direct manager -> member session (when student has direct managerId)
         || (
           sess.ownerRole == 'manager'
           && myUser().role == 'member'
@@ -83,25 +83,52 @@ service cloud.firestore {
       return dist <= sess.location.radius;
     }
 
-    // Strict 10-second server-clock validation on sessionSecrets
+    // Authoritative server-clock validation on sessionSecrets with rotation-boundary handoff:
+    // - QR rotates visually every 10 seconds on the teacher/projector screen.
+    // - Current token/code: valid for 10s display cycle + 4s network commit latency buffer (14s total).
+    // - Previous token/code: valid ONLY during a 5s post-rotation handoff window (and <= 15s from original issue)
+    //   so legitimate in-flight student scans across a 10s boundary never falsely fail as expired,
+    //   while shared screenshots / replayed QR codes remain strictly rejected.
     function liveSecretValid(secret, data) {
-      let within10s = secret.active == true
+      let currentFresh = secret.active == true
         && secret.tokenUpdatedAt is timestamp
-        && request.time >= secret.tokenUpdatedAt
-        && request.time <= secret.tokenUpdatedAt + duration.value(10, 's');
-      return within10s && (
-        (data.method == 'live_qr'
-          && 'submittedToken' in data
-          && secret.token is string
-          && secret.token.size() >= 32
-          && data.submittedToken == secret.token)
-        ||
-        (data.method == 'live_code'
-          && 'submittedCode' in data
-          && secret.code is string
-          && secret.code.size() == 6
-          && data.submittedCode == secret.code)
-      );
+        && request.time <= secret.tokenUpdatedAt + duration.value(14, 's');
+
+      let prevFresh = secret.active == true
+        && secret.tokenUpdatedAt is timestamp
+        && 'prevTokenUpdatedAt' in secret
+        && secret.prevTokenUpdatedAt is timestamp
+        && request.time <= secret.tokenUpdatedAt + duration.value(5, 's')
+        && request.time <= secret.prevTokenUpdatedAt + duration.value(15, 's');
+
+      let qrMatchesCurrent = data.method == 'live_qr'
+        && 'submittedToken' in data
+        && secret.token is string
+        && secret.token.size() >= 32
+        && data.submittedToken == secret.token;
+
+      let qrMatchesPrev = data.method == 'live_qr'
+        && 'submittedToken' in data
+        && 'prevToken' in secret
+        && secret.prevToken is string
+        && secret.prevToken.size() >= 32
+        && data.submittedToken == secret.prevToken;
+
+      let codeMatchesCurrent = data.method == 'live_code'
+        && 'submittedCode' in data
+        && secret.code is string
+        && secret.code.size() == 6
+        && data.submittedCode == secret.code;
+
+      let codeMatchesPrev = data.method == 'live_code'
+        && 'submittedCode' in data
+        && 'prevCode' in secret
+        && secret.prevCode is string
+        && secret.prevCode.size() == 6
+        && data.submittedCode == secret.prevCode;
+
+      return (currentFresh && (qrMatchesCurrent || codeMatchesCurrent))
+        || (prevFresh && (qrMatchesPrev || codeMatchesPrev));
     }
 
     // Globally unique 6-character user ID lookup (e.g. PAN482)
@@ -259,18 +286,20 @@ service cloud.firestore {
       );
 
       allow create: if isActive()
-        && request.resource.data.orgId == myUser().orgId
+        && inSameOrg(request.resource.data.orgId)
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.ownerRole == myUser().role
-        && myUser().role in ['admin', 'manager']
+        && (
+          (myUser().role in ['super_admin', 'admin'] && request.resource.data.ownerRole == 'admin')
+          || (myUser().role == 'manager' && request.resource.data.ownerRole == 'manager')
+        )
         && request.resource.data.status == 'open';
 
-      allow update: if isActive() && resource.data.orgId == myUser().orgId && (
+      allow update: if isActive() && inSameOrg(resource.data.orgId) && (
         resource.data.ownerUid == request.auth.uid
         || isOrgAdmin(resource.data.orgId)
       );
 
-      allow delete: if isActive() && resource.data.orgId == myUser().orgId && (
+      allow delete: if isActive() && inSameOrg(resource.data.orgId) && (
         resource.data.ownerUid == request.auth.uid
         || isOrgAdmin(resource.data.orgId)
       );
@@ -281,14 +310,43 @@ service cloud.firestore {
       allow read: if isActive() && resource.data.ownerUid == request.auth.uid;
       allow create: if isActive()
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.orgId == myUser().orgId
-        && myUser().role in ['admin', 'manager']
-        && request.resource.data.tokenUpdatedAt == request.time;
+        && inSameOrg(request.resource.data.orgId)
+        && myUser().role in ['super_admin', 'admin', 'manager']
+        && request.resource.data.tokenUpdatedAt == request.time
+        && request.resource.data.active == true
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 32
+        && request.resource.data.code is string
+        && request.resource.data.code.size() == 6;
       allow update: if isActive()
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == resource.data.ownerUid
         && request.resource.data.orgId == resource.data.orgId
-        && request.resource.data.tokenUpdatedAt == request.time;
+        && request.resource.data.tokenUpdatedAt == request.time
+        && (
+          (
+            request.resource.data.active == false
+            && request.resource.data.token == ''
+            && request.resource.data.code == ''
+            && request.resource.data.get('prevToken', '') == ''
+            && request.resource.data.get('prevCode', '') == ''
+          )
+          || (
+            request.resource.data.active == true
+            && request.resource.data.token is string
+            && request.resource.data.token.size() >= 32
+            && request.resource.data.code is string
+            && request.resource.data.code.size() == 6
+            && (
+              request.resource.data.get('prevToken', '') == ''
+              || (
+                request.resource.data.prevToken == resource.data.token
+                && request.resource.data.prevCode == resource.data.code
+                && request.resource.data.prevTokenUpdatedAt == resource.data.tokenUpdatedAt
+              )
+            )
+          )
+        );
       allow delete: if isActive() && resource.data.ownerUid == request.auth.uid;
     }
 

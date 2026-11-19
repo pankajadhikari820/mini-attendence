@@ -287,6 +287,9 @@ export interface SessionSecret {
   active: boolean;
   token: string;
   code: string;
+  prevToken?: string;
+  prevCode?: string;
+  prevTokenUpdatedAt?: Timestamp | null;
   rotationSeq?: number;
   tokenUpdatedAt?: Timestamp | null;
 }

@@ -199,9 +199,11 @@ export function getDistanceMeters(
 }
 
 /**
- * Matches the flat-earth distance calculation performed inside Firestore rules.
+ * Exact unrounded flat-earth distance matching Firestore Security Rules `flatEarthDistanceOk`.
+ * Use this for `<= radius` comparisons so boundary readings (e.g. 50.4m vs 50m) never pass client
+ * validation only to be rejected by Firestore rules as permission-denied.
  */
-export function getFlatEarthDistanceMeters(
+export function getFlatEarthDistanceMetersExact(
   lat1: number,
   lng1: number,
   lat2: number,
@@ -210,7 +212,20 @@ export function getFlatEarthDistanceMeters(
 ): number {
   const dLat = (lat1 - lat2) * 111320;
   const dLng = (lng1 - lng2) * 111320 * cosLat;
-  return Math.round(Math.sqrt(dLat * dLat + dLng * dLng));
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
+
+/**
+ * Rounded flat-earth distance in whole meters for clean UI display and storage.
+ */
+export function getFlatEarthDistanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+  cosLat: number
+): number {
+  return Math.round(getFlatEarthDistanceMetersExact(lat1, lng1, lat2, lng2, cosLat));
 }
 
 export interface GeoReading {
