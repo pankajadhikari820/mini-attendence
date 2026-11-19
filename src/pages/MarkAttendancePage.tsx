@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
   AlertCircle,
+  ArrowLeft,
   Camera,
   CameraOff,
   CheckCircle2,
@@ -326,6 +328,20 @@ export const MarkAttendancePage: React.FC = () => {
   return (
     <Layout title={t('attendance.title')}>
       <div className="space-y-6">
+        {/* Backup Mode Banner */}
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-900/70 bg-amber-50/70 dark:bg-amber-950/30 px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <p className="text-xs sm:text-sm text-amber-900 dark:text-amber-200">
+            {t('attendance.backupNotice')}
+          </p>
+          <Link
+            to="/attendance"
+            className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#C25E00] hover:underline whitespace-nowrap shrink-0"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>{t('attendance.backToLive')}</span>
+          </Link>
+        </div>
+
         {/* Header & Mode Switch */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>

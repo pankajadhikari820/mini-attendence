@@ -27,7 +27,7 @@ import {
   setUserStatus,
   updateUserDetails,
 } from '../services/userService';
-import { getFirebaseErrorKey } from '../utils/helpers';
+import { getFirebaseErrorKey, needsEnglishNameForId } from '../utils/helpers';
 import { Layout } from './Layout';
 import { QRCardModal } from './QRCardModal';
 import { CardSkeleton, EmptyState } from './Skeletons';
@@ -40,6 +40,7 @@ interface PeopleManagerViewProps {
 interface CsvPreviewRow {
   rowNum: number;
   name: string;
+  englishName: string;
   email: string;
   phone: string;
   rollNumber: string;
@@ -76,11 +77,14 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
 
   // Add / Edit form state
   const [formName, setFormName] = useState('');
+  const [formEnglishName, setFormEnglishName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formRoll, setFormRoll] = useState('');
   const [formManagerId, setFormManagerId] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const showAddEnglishName = needsEnglishNameForId(formName);
 
   // CSV import state
   const [csvRows, setCsvRows] = useState<CsvPreviewRow[]>([]);
@@ -165,6 +169,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
 
   const openAddModal = () => {
     setFormName('');
+    setFormEnglishName('');
     setFormEmail('');
     setFormPhone('');
     setFormRoll('');
@@ -186,6 +191,10 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
       showToast(t('errors.requiredFields'), 'error');
       return;
     }
+    if (showAddEnglishName && needsEnglishNameForId(formEnglishName)) {
+      showToast(t('errors.englishNameRequired'), 'error');
+      return;
+    }
     setSaving(true);
     try {
       const assignedManagerId =
@@ -200,6 +209,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
         role: targetRole,
         managerId: assignedManagerId,
         name: formName,
+        englishName: showAddEnglishName ? formEnglishName.trim() : undefined,
         email: formEmail,
         phone: formPhone,
         rollNumber: formRoll,
@@ -294,13 +304,16 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
         const seenEmails = new Set(people.map((p) => p.email.toLowerCase()));
         const parsed: CsvPreviewRow[] = res.data.map((row, idx) => {
           const name = (row.name || row.Name || '').trim();
+          const englishName = (row.englishName || row.english_name || row['English Name'] || '').trim();
           const email = (row.email || row.Email || '').trim().toLowerCase();
           const phone = (row.phone || row.Phone || '').trim();
           const rollNumber = (row.rollNumber || row.roll || row.employeeId || '').trim();
 
           let error: string | undefined;
           if (!name) error = t('people.csvMissingName');
-          else if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          else if (needsEnglishNameForId(name) && needsEnglishNameForId(englishName)) {
+            error = t('errors.englishNameRequired');
+          } else if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             error = t('people.csvInvalidEmail');
           } else if (seenEmails.has(email)) {
             error = t('errors.emailInUse');
@@ -308,7 +321,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             seenEmails.add(email);
           }
 
-          return { rowNum: idx + 1, name, email, phone, rollNumber, error };
+          return { rowNum: idx + 1, name, englishName, email, phone, rollNumber, error };
         });
         setCsvRows(parsed);
       },
@@ -316,7 +329,8 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
   };
 
   const handleDownloadSampleCsv = () => {
-    const csv = 'name,email,phone,rollNumber\nAarav Sharma,aarav@example.com,9810012345,101\nDiya Patel,diya@example.com,9810012346,102\n';
+    const csv =
+      'name,email,phone,rollNumber,englishName\nAarav Sharma,aarav@example.com,9810012345,101,\nदीया पटेल,diya@example.com,9810012346,102,Diya Patel\n';
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -350,6 +364,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
           role: targetRole,
           managerId: assignedManagerId,
           name: row.name,
+          englishName: row.englishName || undefined,
           email: row.email,
           phone: row.phone,
           rollNumber: row.rollNumber,
@@ -682,6 +697,24 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
                   className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
                 />
               </div>
+              {showAddEnglishName && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    {t('common.englishNameLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formEnglishName}
+                    onChange={(e) => setFormEnglishName(e.target.value)}
+                    placeholder="e.g. Pankaj Sharma"
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
+                  />
+                  <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                    {t('common.englishNameHint')}
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium mb-1">{t('common.email')}</label>
                 <input

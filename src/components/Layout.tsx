@@ -4,6 +4,8 @@ import {
   BarChart3,
   Bell,
   CalendarClock,
+  CheckCircle2,
+  ClipboardList,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -72,7 +74,8 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
     if (profile?.role === 'admin') {
       return [
         { to: '/admin', label: t('nav.dashboard'), icon: LayoutDashboard, mobile: true },
-        { to: '/attendance', label: t('nav.markAttendance'), icon: ScanLine, mobile: true },
+        { to: '/attendance', label: t('nav.startAttendance'), icon: ScanLine, mobile: true },
+        { to: '/attendance/manual', label: t('nav.manualBackup'), icon: ClipboardList },
         { to: '/admin/managers', label: managerLabel, icon: UserCog, mobile: true },
         { to: '/admin/members', label: memberLabel, icon: Users },
         { to: '/reports', label: t('nav.reports'), icon: BarChart3, mobile: true },
@@ -84,8 +87,10 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
     if (profile?.role === 'manager') {
       return [
         { to: '/manager', label: t('nav.dashboard'), icon: LayoutDashboard, mobile: true },
-        { to: '/attendance', label: t('nav.markAttendance'), icon: ScanLine, mobile: true },
-        { to: '/manager/members', label: memberLabel, icon: Users, mobile: true },
+        { to: '/attendance', label: t('nav.startAttendance'), icon: ScanLine, mobile: true },
+        { to: '/mark', label: t('nav.markYourAttendance'), icon: CheckCircle2, mobile: true },
+        { to: '/attendance/manual', label: t('nav.manualBackup'), icon: ClipboardList },
+        { to: '/manager/members', label: memberLabel, icon: Users },
         { to: '/reports', label: t('nav.reports'), icon: BarChart3, mobile: true },
         { to: '/leaves', label: t('nav.leaves'), icon: CalendarClock },
         { to: '/announcements', label: t('nav.announcements'), icon: Megaphone },
@@ -93,6 +98,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
       ];
     }
     return [
+      { to: '/mark', label: t('nav.markYourAttendance'), icon: ScanLine, mobile: true },
       { to: '/member', label: t('nav.myQr'), icon: QrCode, mobile: true },
       { to: '/leaves', label: t('nav.leaves'), icon: CalendarClock, mobile: true },
       { to: '/announcements', label: t('nav.announcements'), icon: Megaphone, mobile: true },
@@ -137,13 +143,21 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
         )}
 
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          {(profile?.role === 'admin' || profile?.role === 'manager') && (
+          {profile?.role === 'admin' || profile?.role === 'manager' ? (
             <Link
               to="/attendance"
               className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors"
             >
               <ScanLine className="w-4 h-4" />
-              <span className="whitespace-nowrap">{t('nav.markAttendance')}</span>
+              <span className="whitespace-nowrap">{t('nav.startAttendance')}</span>
+            </Link>
+          ) : (
+            <Link
+              to="/mark"
+              className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors"
+            >
+              <ScanLine className="w-4 h-4" />
+              <span className="whitespace-nowrap">{t('nav.markYourAttendance')}</span>
             </Link>
           )}
 
@@ -153,7 +167,12 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={item.to === '/admin' || item.to === '/manager' || item.to === '/member'}
+                end={
+                  item.to === '/admin' ||
+                  item.to === '/manager' ||
+                  item.to === '/member' ||
+                  item.to === '/attendance'
+                }
                 className={({ isActive }) =>
                   `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
                     isActive
@@ -302,7 +321,12 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/admin' || item.to === '/manager' || item.to === '/member'}
+              end={
+                item.to === '/admin' ||
+                item.to === '/manager' ||
+                item.to === '/member' ||
+                item.to === '/attendance'
+              }
               className={({ isActive }) =>
                 `flex flex-col items-center justify-center gap-0.5 min-w-[56px] py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
                   isActive

@@ -13,8 +13,12 @@ import {
   where,
 } from 'firebase/firestore';
 import { auth, createSecondaryAccount, db } from '../firebase';
-import type { LanguageCode, Organization, UserProfile, UserStatus } from '../types';
-import { buildOrgPrefix, formatMemberId, generateCode } from '../utils/helpers';
+import type { LanguageCode, Organization, UserProfile, UserRole, UserStatus } from '../types';
+import {
+  extractIdPrefixFromName,
+  generateCandidateUserId,
+  generateCode,
+} from '../utils/helpers';
 import { createNotification } from './communicationService';
 
 export async function generateUniqueManagerCode(): Promise<string> {
@@ -26,33 +30,52 @@ export async function generateUniqueManagerCode(): Promise<string> {
   return generateCode(8);
 }
 
-/**
- * Atomically increments the org counter in a Firestore transaction
- * and returns a unique readable ID like ORG-MGR-0001 or ORG-MEM-0001.
- */
-export async function allocateMemberId(
-  orgId: string,
-  orgName: string,
-  role: 'manager' | 'member'
-): Promise<string> {
-  const orgRef = doc(db, 'organizations', orgId);
-  const nextNumber = await runTransaction(db, async (tx) => {
-    const snap = await tx.get(orgRef);
-    if (!snap.exists()) throw new Error('Organization not found');
-    const data = snap.data() as Organization;
-    const current = data.counters?.[role] ?? 0;
-    const next = current + 1;
-    tx.update(orgRef, {
-      counters: {
-        manager: role === 'manager' ? next : data.counters?.manager ?? 0,
-        member: role === 'member' ? next : data.counters?.member ?? 0,
-      },
-    });
-    return next;
-  });
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
-  const prefix = buildOrgPrefix(orgName);
-  return formatMemberId(prefix, role, nextNumber);
+/**
+ * Atomically reserves a globally unique 6-character ID (e.g. PAN482)
+ * using a Firestore transaction on the `userIds/{ID}` lookup collection.
+ * Retries up to 30 times with new random 3 digits; if exhausted, changes the 3rd letter.
+ */
+export async function allocateUniqueUserId(params: {
+  nameForId: string;
+  uid: string;
+  orgId: string;
+  role: UserRole;
+  isDemo?: boolean;
+}): Promise<string> {
+  const basePrefix = extractIdPrefixFromName(params.nameForId);
+  const firstTwo = basePrefix.slice(0, 2);
+  const startThirdIdx = Math.max(0, ALPHABET.indexOf(basePrefix[2] || 'X'));
+
+  for (let letterStep = 0; letterStep < 26; letterStep++) {
+    const thirdChar = ALPHABET[(startThirdIdx + letterStep) % 26];
+    const prefix = `${firstTwo}${thirdChar}`;
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const candidate = generateCandidateUserId(prefix);
+      const idRef = doc(db, 'userIds', candidate);
+      try {
+        const reserved = await runTransaction(db, async (tx) => {
+          const snap = await tx.get(idRef);
+          if (snap.exists()) return false;
+          tx.set(idRef, {
+            uid: params.uid,
+            orgId: params.orgId,
+            role: params.role,
+            ...(params.isDemo ? { isDemo: true } : {}),
+            createdAt: serverTimestamp(),
+          });
+          return true;
+        });
+        if (reserved) return candidate;
+      } catch {
+        // Collision or transaction retry contention — try next candidate
+      }
+    }
+  }
+
+  throw new Error('Could not allocate unique 6-character ID');
 }
 
 /**
@@ -64,6 +87,7 @@ export async function addPersonDirect(params: {
   role: 'manager' | 'member';
   managerId: string | null;
   name: string;
+  englishName?: string;
   email: string;
   phone: string;
   rollNumber?: string;
@@ -72,9 +96,14 @@ export async function addPersonDirect(params: {
   const cleanEmail = params.email.trim().toLowerCase();
   const { uid, resetEmailSent } = await createSecondaryAccount(cleanEmail);
 
-  const memberId = await allocateMemberId(params.org.id, params.org.name, params.role);
-  let managerCode: string | undefined;
+  const memberId = await allocateUniqueUserId({
+    nameForId: params.englishName?.trim() || params.name,
+    uid,
+    orgId: params.org.id,
+    role: params.role,
+  });
 
+  let managerCode: string | undefined;
   if (params.role === 'manager') {
     managerCode = await generateUniqueManagerCode();
     await setDoc(doc(db, 'managerCodes', managerCode), {
@@ -89,6 +118,7 @@ export async function addPersonDirect(params: {
   const userDoc: Omit<UserProfile, 'createdAt'> & { createdAt: ReturnType<typeof serverTimestamp> } = {
     uid,
     name: params.name.trim(),
+    ...(params.englishName?.trim() ? { englishName: params.englishName.trim() } : {}),
     email: cleanEmail,
     phone: params.phone.trim(),
     rollNumber: params.rollNumber?.trim() || '',
@@ -120,6 +150,7 @@ export async function selfRegisterUser(params: {
   managerId: string | null;
   parentNotifyUid: string | null;
   name: string;
+  englishName?: string;
   email: string;
   password: string;
   phone: string;
@@ -133,6 +164,7 @@ export async function selfRegisterUser(params: {
   await setDoc(doc(db, 'users', uid), {
     uid,
     name: params.name.trim(),
+    ...(params.englishName?.trim() ? { englishName: params.englishName.trim() } : {}),
     email: cleanEmail,
     phone: params.phone.trim(),
     rollNumber: params.rollNumber?.trim() || '',
@@ -163,7 +195,15 @@ export async function selfRegisterUser(params: {
 
 export async function approvePendingUser(org: Organization, person: UserProfile): Promise<void> {
   if (person.role === 'admin') return;
-  const memberId = person.memberId || (await allocateMemberId(org.id, org.name, person.role));
+  const memberId =
+    person.memberId ||
+    (await allocateUniqueUserId({
+      nameForId: person.englishName || person.name,
+      uid: person.uid,
+      orgId: org.id,
+      role: person.role,
+    }));
+
   const patch: Record<string, unknown> = {
     status: 'active',
     memberId,
@@ -187,7 +227,7 @@ export async function approvePendingUser(org: Organization, person: UserProfile)
     orgId: org.id,
     toUid: person.uid,
     type: 'approval',
-    text: `Your account has been approved. Your ID is ${memberId}.`,
+    text: `Your account has been approved. Your unique ID is ${memberId}.`,
   });
 }
 
@@ -216,6 +256,13 @@ export async function deleteUserProfile(person: UserProfile): Promise<void> {
   if (person.managerCode) {
     try {
       await deleteDoc(doc(db, 'managerCodes', person.managerCode));
+    } catch {
+      // Ignore if already removed
+    }
+  }
+  if (person.memberId && /^[A-Z]{3}\d{3}$/.test(person.memberId)) {
+    try {
+      await deleteDoc(doc(db, 'userIds', person.memberId));
     } catch {
       // Ignore if already removed
     }

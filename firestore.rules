@@ -39,6 +39,49 @@ service cloud.firestore {
         && request.resource.data.uid == resource.data.uid;
     }
 
+    function isDirectChildOfSession(sess) {
+      return myUser().orgId == sess.orgId && (
+        (sess.ownerRole == 'admin' && myUser().role == 'manager') ||
+        (sess.ownerRole == 'manager' && myUser().role == 'member' && myUser().managerId == sess.ownerUid)
+      );
+    }
+
+    function flatEarthDistanceOk(sess, lat, lng) {
+      let dLat = (lat - sess.location.lat) * 111320.0;
+      let dLng = (lng - sess.location.lng) * 111320.0 * sess.location.cosLat;
+      let dist = math.sqrt(math.pow(dLat, 2) + math.pow(dLng, 2));
+      return dist <= sess.location.radius;
+    }
+
+    function liveSecretValid(secret, data) {
+      let withinCurrent = request.time <= secret.tokenUpdatedAt + duration.value(15, 's');
+      let withinPrev = request.time <= secret.tokenUpdatedAt + duration.value(5, 's');
+      return (
+        (data.method == 'live_qr' && 'submittedToken' in data && (
+          (data.submittedToken == secret.token && withinCurrent) ||
+          (secret.prevToken != '' && data.submittedToken == secret.prevToken && withinPrev)
+        )) ||
+        (data.method == 'live_code' && 'submittedCode' in data && (
+          (data.submittedCode == secret.code && withinCurrent) ||
+          (secret.prevCode != '' && data.submittedCode == secret.prevCode && withinPrev)
+        ))
+      );
+    }
+
+    // Globally unique 6-character user ID lookup (e.g. PAN482)
+    match /userIds/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && hasProfile() && myUser().role == 'admin';
+      allow create: if isSignedIn()
+        && userId.matches('^[A-Z]{3}[0-9]{3}$')
+        && !exists(/databases/$(database)/documents/userIds/$(userId));
+      allow update: if false;
+      allow delete: if isSignedIn() && (
+        isOrgAdmin(resource.data.orgId) ||
+        (isOrgManager(resource.data.orgId) && resource.data.role == 'member')
+      );
+    }
+
     // Public lookup tables for self-registration (get by exact code only, NO list)
     match /orgCodes/{code} {
       allow get: if true;
@@ -74,7 +117,6 @@ service cloud.firestore {
       allow read: if inSameOrg(orgId);
       allow create: if isSignedIn() && request.resource.data.adminUid == request.auth.uid;
       allow update: if isOrgAdmin(orgId)
-        // Managers may increment member counter in transaction when adding a member
         || (isOrgManager(orgId)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['counters']));
       allow delete: if isOrgAdmin(orgId);
@@ -82,10 +124,6 @@ service cloud.firestore {
 
     // Users
     match /users/{uid} {
-      // Read rules:
-      // - Self can always read own profile
-      // - Org Admin reads everyone in their org
-      // - Org Manager reads only themselves, their org Admin, or their own Members
       allow read: if isSignedIn() && (
         request.auth.uid == uid
         || (hasProfile() && myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
@@ -94,11 +132,6 @@ service cloud.firestore {
            ))
       );
 
-      // Create rules:
-      // - New Org Admin creating their own admin doc
-      // - Self-registration creating own pending manager/member doc
-      // - Active Org Admin creating manager/member (or demo users) inside own org
-      // - Active Org Manager creating their own member inside own org
       allow create: if isSignedIn() && (
         (request.auth.uid == uid && request.resource.data.uid == uid && request.resource.data.role == 'admin' && request.resource.data.status == 'active')
         || (request.auth.uid == uid && request.resource.data.uid == uid && request.resource.data.status == 'pending' && request.resource.data.role in ['manager', 'member'])
@@ -106,10 +139,6 @@ service cloud.firestore {
         || (isOrgManager(request.resource.data.orgId) && request.resource.data.role == 'member' && request.resource.data.managerId == request.auth.uid)
       );
 
-      // Update rules:
-      // - Self can only update non-privileged fields (name, phone, language, rollNumber)
-      // - Org Admin can update anyone in their org
-      // - Org Manager can update their own Members (e.g., approve/deactivate/edit) without elevating role
       allow update: if isSignedIn() && (
         (request.auth.uid == uid && userImmutableFieldsUnchanged())
         || isOrgAdmin(resource.data.orgId)
@@ -121,16 +150,115 @@ service cloud.firestore {
             && request.resource.data.managerId == request.auth.uid)
       );
 
-      // Delete rules:
       allow delete: if isSignedIn() && (
         isOrgAdmin(resource.data.orgId)
         || (isOrgManager(resource.data.orgId) && resource.data.role == 'member' && resource.data.managerId == request.auth.uid)
       );
     }
 
+    // Live Attendance Sessions (public metadata for owner & direct children only)
+    match /sessions/{sessionId} {
+      allow read: if isActive() && myUser().orgId == resource.data.orgId && (
+        myUser().role == 'admin'
+        || resource.data.ownerUid == request.auth.uid
+        || isDirectChildOfSession(resource.data)
+      );
+
+      allow create: if isActive()
+        && request.resource.data.orgId == myUser().orgId
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerRole == myUser().role
+        && myUser().role in ['admin', 'manager']
+        && request.resource.data.status == 'open';
+
+      allow update: if isActive() && resource.data.orgId == myUser().orgId && (
+        resource.data.ownerUid == request.auth.uid
+        || isOrgAdmin(resource.data.orgId)
+      );
+
+      allow delete: if isActive() && resource.data.orgId == myUser().orgId && (
+        resource.data.ownerUid == request.auth.uid
+        || isOrgAdmin(resource.data.orgId)
+      );
+    }
+
+    // Session Secrets: STRICTLY owner-only. Members/children can NEVER read or write.
+    match /sessionSecrets/{sessionId} {
+      allow read: if isActive() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isActive()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.orgId == myUser().orgId
+        && myUser().role in ['admin', 'manager'];
+      allow update, delete: if isActive() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // One device = one person per session (write-once per sessionId_deviceId)
+    match /sessionDevices/{deviceDocId} {
+      allow get: if isActive() && (resource == null || resource.data.orgId == myUser().orgId);
+      allow list: if isActive() && (myUser().role == 'admin' || myUser().role == 'manager');
+      allow create: if isActive()
+        && request.resource.data.orgId == myUser().orgId
+        && request.resource.data.personUid == request.auth.uid
+        && deviceDocId == request.resource.data.sessionId + '_' + request.resource.data.deviceId
+        && !exists(/databases/$(database)/documents/sessionDevices/$(deviceDocId));
+      allow update: if false;
+      allow delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    // Failed attendance attempts log (owner sees rejected attempts on session screen)
+    match /attempts/{attemptId} {
+      allow read: if isActive() && resource.data.orgId == myUser().orgId && (
+        myUser().role == 'admin'
+        || resource.data.ownerUid == request.auth.uid
+      );
+      allow create: if isActive()
+        && request.resource.data.orgId == myUser().orgId
+        && request.resource.data.personUid == request.auth.uid;
+      allow update: if false;
+      allow delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    function canSelfMarkAttendance(recordId) {
+      let sid = request.resource.data.sessionId;
+      let sess = get(/databases/$(database)/documents/sessions/$(sid)).data;
+      let secret = get(/databases/$(database)/documents/sessionSecrets/$(sid)).data;
+      let devDocId = sid + '_' + request.resource.data.deviceId;
+      return request.resource.data.method in ['live_qr', 'live_code']
+        && request.resource.data.personUid == request.auth.uid
+        && recordId == request.resource.data.orgId + '_' + request.resource.data.date + '_' + request.auth.uid
+        && request.resource.data.timestamp == request.time
+        && sid is string
+        && request.resource.data.deviceId is string
+        && exists(/databases/$(database)/documents/sessions/$(sid))
+        && exists(/databases/$(database)/documents/sessionSecrets/$(sid))
+        && sess.status == 'open'
+        && request.time <= sess.endsAt
+        && isDirectChildOfSession(sess)
+        && liveSecretValid(secret, request.resource.data)
+        && (
+          !sess.locationCheckEnabled
+          || (
+            request.resource.data.lat is number
+            && request.resource.data.lng is number
+            && flatEarthDistanceOk(sess, request.resource.data.lat, request.resource.data.lng)
+          )
+        )
+        && existsAfter(/databases/$(database)/documents/sessionDevices/$(devDocId))
+        && getAfter(/databases/$(database)/documents/sessionDevices/$(devDocId)).data.personUid == request.auth.uid;
+    }
+
     // Attendance: deterministic ID {orgId}_{date}_{personUid}
     match /attendance/{recordId} {
-      allow read: if isSignedIn() && hasProfile() && (
+      allow get: if isSignedIn() && hasProfile() && (
+        resource == null
+        || (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
+        || (myUser().role == 'manager' && myUser().orgId == resource.data.orgId && (
+              resource.data.managerId == request.auth.uid || resource.data.personUid == request.auth.uid
+           ))
+        || (myUser().role == 'member' && resource.data.personUid == request.auth.uid)
+      );
+
+      allow list: if isSignedIn() && hasProfile() && (
         (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
         || (myUser().role == 'manager' && myUser().orgId == resource.data.orgId && (
               resource.data.managerId == request.auth.uid || resource.data.personUid == request.auth.uid
@@ -138,27 +266,37 @@ service cloud.firestore {
         || (myUser().role == 'member' && resource.data.personUid == request.auth.uid)
       );
 
-      // Only direct parent can mark attendance for active people (Admin can also create demo data in own org)
+      // Two valid create paths:
+      // 1) Self-marking via live rotating QR ("live_qr") or live 6-digit code ("live_code")
+      // 2) Backup manual / ID-card marking by direct parent (Admin -> Manager, Manager -> own Member)
       allow create: if isActive()
         && request.resource.data.orgId == myUser().orgId
         && request.resource.data.status in ['present', 'absent', 'late', 'leave']
-        && request.resource.data.method in ['qr', 'manual']
-        && exists(/databases/$(database)/documents/users/$(request.resource.data.personUid))
-        && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.orgId == myUser().orgId
-        && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.status == 'active'
         && (
-          // Admin marking a Manager (or Admin seeding demo attendance)
-          (myUser().role == 'admin' && (
-            get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'manager'
-            || request.resource.data.isDemo == true
-          ))
-          // Manager marking their own Member
-          || (myUser().role == 'manager'
-              && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'member'
-              && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.managerId == request.auth.uid)
+          (
+            request.resource.data.method in ['live_qr', 'live_code']
+            && 'sessionId' in request.resource.data
+            && 'deviceId' in request.resource.data
+            && canSelfMarkAttendance(recordId)
+          )
+          ||
+          (
+            request.resource.data.method in ['qr', 'manual']
+            && exists(/databases/$(database)/documents/users/$(request.resource.data.personUid))
+            && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.orgId == myUser().orgId
+            && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.status == 'active'
+            && (
+              (myUser().role == 'admin' && (
+                get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'manager'
+                || request.resource.data.isDemo == true
+              ))
+              || (myUser().role == 'manager'
+                  && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'member'
+                  && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.managerId == request.auth.uid)
+            )
+          )
         );
 
-      // Update: Admin can correct any day in own org; Manager can correct own Members' records
       allow update: if isActive()
         && resource.data.orgId == myUser().orgId
         && request.resource.data.orgId == resource.data.orgId

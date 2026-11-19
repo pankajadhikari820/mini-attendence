@@ -16,7 +16,9 @@ import { AdminDashboard } from './pages/AdminDashboard';
 import { ManageManagersPage } from './pages/ManageManagersPage';
 import { ManagerDashboard } from './pages/ManagerDashboard';
 import { ManageMembersPage } from './pages/ManageMembersPage';
+import { StartAttendancePage } from './pages/StartAttendancePage';
 import { MarkAttendancePage } from './pages/MarkAttendancePage';
+import { MarkYourAttendancePage } from './pages/MarkYourAttendancePage';
 import { LeavesPage } from './pages/LeavesPage';
 import { AnnouncementsPage } from './pages/AnnouncementsPage';
 import { ReportsPage } from './pages/ReportsPage';
@@ -117,7 +119,23 @@ export default function App() {
                   path="/attendance"
                   element={
                     <ProtectedRoute allowedRoles={['admin', 'manager']}>
+                      <StartAttendancePage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/attendance/manual"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin', 'manager']}>
                       <MarkAttendancePage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/mark"
+                  element={
+                    <ProtectedRoute allowedRoles={['manager', 'member']}>
+                      <MarkYourAttendancePage />
                     </ProtectedRoute>
                   }
                 />

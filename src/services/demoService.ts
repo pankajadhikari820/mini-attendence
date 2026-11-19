@@ -9,33 +9,31 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { AttendanceStatus, Organization, UserProfile } from '../types';
-import { buildOrgPrefix, formatMemberId, getPastDates } from '../utils/helpers';
+import type { AttendanceMethod, AttendanceStatus, Organization, UserProfile } from '../types';
+import { getPastDates } from '../utils/helpers';
 import { buildAttendanceDocId } from './attendanceService';
+import { allocateUniqueUserId } from './userService';
 
 const DEMO_MANAGERS = [
-  { key: 'mgr1', name: 'Dr. Kavita Nair', email: 'kavita.demo@example.com', phone: '9810112201' },
+  { key: 'mgr1', name: 'Kavita Nair', email: 'kavita.demo@example.com', phone: '9810112201' },
   { key: 'mgr2', name: 'Rajesh Verma', email: 'rajesh.demo@example.com', phone: '9810112202' },
   { key: 'mgr3', name: 'Meera Deshmukh', email: 'meera.demo@example.com', phone: '9810112203' },
 ];
 
 const DEMO_MEMBERS = [
-  // Manager 1
   { key: 'mem01', mgrIdx: 0, name: 'Aarav Sharma', roll: '101', rate: 0.94 },
   { key: 'mem02', mgrIdx: 0, name: 'Diya Patel', roll: '102', rate: 0.90 },
-  { key: 'mem03', mgrIdx: 0, name: 'Rohan Kulkarni', roll: '103', rate: 0.62 }, // low attendance
+  { key: 'mem03', mgrIdx: 0, name: 'Rohan Kulkarni', roll: '103', rate: 0.62 },
   { key: 'mem04', mgrIdx: 0, name: 'Ananya Iyer', roll: '104', rate: 0.96 },
   { key: 'mem05', mgrIdx: 0, name: 'Kabir Mehta', roll: '105', rate: 0.85 },
-  // Manager 2
   { key: 'mem06', mgrIdx: 1, name: 'Priya Singh', roll: '201', rate: 0.92 },
-  { key: 'mem07', mgrIdx: 1, name: 'Vihaan Joshi', roll: '202', rate: 0.68 }, // low attendance
+  { key: 'mem07', mgrIdx: 1, name: 'Vihaan Joshi', roll: '202', rate: 0.68 },
   { key: 'mem08', mgrIdx: 1, name: 'Sneha Reddy', roll: '203', rate: 0.88 },
   { key: 'mem09', mgrIdx: 1, name: 'Arjun Malhotra', roll: '204', rate: 0.82 },
   { key: 'mem10', mgrIdx: 1, name: 'Neha Gupta', roll: '205', rate: 0.95 },
-  // Manager 3
   { key: 'mem11', mgrIdx: 2, name: 'Siddharth Rao', roll: '301', rate: 0.91 },
   { key: 'mem12', mgrIdx: 2, name: 'Tanvi Kapoor', roll: '302', rate: 0.86 },
-  { key: 'mem13', mgrIdx: 2, name: 'Ishaan Chatterjee', roll: '303', rate: 0.58 }, // low attendance
+  { key: 'mem13', mgrIdx: 2, name: 'Ishaan Chatterjee', roll: '303', rate: 0.58 },
   { key: 'mem14', mgrIdx: 2, name: 'Pooja Yadav', roll: '304', rate: 0.93 },
   { key: 'mem15', mgrIdx: 2, name: 'Devansh Tiwari', roll: '305', rate: 0.89 },
 ];
@@ -54,18 +52,25 @@ async function commitOpsInChunks(
 }
 
 export async function loadDemoData(org: Organization, admin: UserProfile): Promise<void> {
-  // Remove any previous demo data first so loading is idempotent
   await deleteDemoData(org.id);
 
-  const prefix = buildOrgPrefix(org.name);
   const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
 
-  const mgrDocs = DEMO_MANAGERS.map((m, idx) => {
-    const uid = `demo_${org.id}_${m.key}`;
-    const memberId = formatMemberId(prefix, 'manager', 901 + idx);
-    const managerCode = `DM${org.orgCode.slice(0, 3)}${idx + 1}`.toUpperCase();
-    return { ...m, uid, memberId, managerCode };
-  });
+  // Allocate globally unique 6-character IDs (e.g. KAV482) for every demo manager & member
+  const mgrDocs = await Promise.all(
+    DEMO_MANAGERS.map(async (m, idx) => {
+      const uid = `demo_${org.id}_${m.key}`;
+      const memberId = await allocateUniqueUserId({
+        nameForId: m.name,
+        uid,
+        orgId: org.id,
+        role: 'manager',
+        isDemo: true,
+      });
+      const managerCode = `DM${org.orgCode.slice(0, 3)}${idx + 1}`.toUpperCase();
+      return { ...m, uid, memberId, managerCode };
+    })
+  );
 
   for (const m of mgrDocs) {
     ops.push((batch) => {
@@ -87,19 +92,27 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
     });
   }
 
-  const memDocs = DEMO_MEMBERS.map((m, idx) => {
-    const uid = `demo_${org.id}_${m.key}`;
-    const mgr = mgrDocs[m.mgrIdx];
-    const memberId = formatMemberId(prefix, 'member', 901 + idx);
-    return {
-      ...m,
-      uid,
-      managerId: mgr.uid,
-      memberId,
-      email: `${m.key}.demo@example.com`,
-      phone: `982000${String(1000 + idx)}`,
-    };
-  });
+  const memDocs = await Promise.all(
+    DEMO_MEMBERS.map(async (m, idx) => {
+      const uid = `demo_${org.id}_${m.key}`;
+      const mgr = mgrDocs[m.mgrIdx];
+      const memberId = await allocateUniqueUserId({
+        nameForId: m.name,
+        uid,
+        orgId: org.id,
+        role: 'member',
+        isDemo: true,
+      });
+      return {
+        ...m,
+        uid,
+        managerId: mgr.uid,
+        memberId,
+        email: `${m.key}.demo@example.com`,
+        phone: `982000${String(1000 + idx)}`,
+      };
+    })
+  );
 
   for (const mem of memDocs) {
     ops.push((batch) => {
@@ -121,7 +134,6 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
     });
   }
 
-  // Generate 30 days of realistic attendance (skipping Sundays for realism)
   const dates = getPastDates(30, org.timezone || 'Asia/Kolkata');
 
   let seed = 42;
@@ -134,11 +146,18 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
     const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
     if (dayOfWeek === 0 && date !== dates[dates.length - 1]) continue;
 
-    // Managers attendance
     for (const m of mgrDocs) {
       const r = nextRand();
       const status: AttendanceStatus =
         r < 0.84 ? 'present' : r < 0.92 ? 'late' : r < 0.96 ? 'leave' : 'absent';
+      const method: AttendanceMethod =
+        status === 'present' || status === 'late'
+          ? r < 0.72
+            ? 'live_qr'
+            : r < 0.86
+            ? 'live_code'
+            : 'manual'
+          : 'manual';
       const docId = buildAttendanceDocId(org.id, date, m.uid);
       ops.push((batch) => {
         batch.set(doc(db, 'attendance', docId), {
@@ -151,15 +170,15 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
           date,
           timestamp: serverTimestamp(),
           status,
-          method: status === 'present' || status === 'late' ? 'qr' : 'manual',
-          markedBy: admin.uid,
+          method,
+          distanceMeters: method === 'manual' ? 0 : Math.floor(nextRand() * 28) + 4,
+          markedBy: method === 'manual' ? admin.uid : m.uid,
           note: '',
           isDemo: true,
         });
       });
     }
 
-    // Members attendance
     for (const mem of memDocs) {
       const r = nextRand();
       let status: AttendanceStatus;
@@ -167,6 +186,15 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
       else if (r < mem.rate) status = 'late';
       else if (r < mem.rate + 0.05) status = 'leave';
       else status = 'absent';
+
+      const method: AttendanceMethod =
+        status === 'present' || status === 'late'
+          ? nextRand() < 0.75
+            ? 'live_qr'
+            : nextRand() < 0.7
+            ? 'live_code'
+            : 'manual'
+          : 'manual';
 
       const docId = buildAttendanceDocId(org.id, date, mem.uid);
       ops.push((batch) => {
@@ -180,8 +208,9 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
           date,
           timestamp: serverTimestamp(),
           status,
-          method: status === 'present' || status === 'late' ? 'qr' : 'manual',
-          markedBy: mem.managerId,
+          method,
+          distanceMeters: method === 'manual' ? 0 : Math.floor(nextRand() * 32) + 3,
+          markedBy: method === 'manual' ? mem.managerId : mem.uid,
           note: '',
           isDemo: true,
         });
@@ -189,7 +218,6 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
     }
   }
 
-  // Sample leaves
   const today = dates[dates.length - 1];
   ops.push((batch) => {
     batch.set(doc(collection(db, 'leaves')), {
@@ -227,7 +255,6 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
     });
   });
 
-  // Sample announcement
   ops.push((batch) => {
     batch.set(doc(collection(db, 'announcements')), {
       orgId: org.id,
@@ -236,7 +263,7 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
       fromRole: 'admin',
       audience: 'all',
       managerId: null,
-      text: 'Morning QR check-in closes at 09:30 AM. Please keep your ID card ready at the gate. (Demo notice)',
+      text: 'Morning attendance session opens at 09:00 AM. Please keep GPS enabled on your phone. (Demo notice)',
       isDemo: true,
       createdAt: serverTimestamp(),
     });
@@ -247,15 +274,26 @@ export async function loadDemoData(org: Organization, admin: UserProfile): Promi
 }
 
 export async function deleteDemoData(orgId: string): Promise<void> {
-  const collectionsToClean = ['users', 'attendance', 'leaves', 'announcements', 'notifications'];
+  const collectionsToClean = [
+    'users',
+    'userIds',
+    'attendance',
+    'leaves',
+    'announcements',
+    'notifications',
+  ];
   const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
 
   for (const col of collectionsToClean) {
-    const snap = await getDocs(
-      query(collection(db, col), where('orgId', '==', orgId), where('isDemo', '==', true))
-    );
-    for (const d of snap.docs) {
-      ops.push((batch) => batch.delete(d.ref));
+    try {
+      const snap = await getDocs(
+        query(collection(db, col), where('orgId', '==', orgId), where('isDemo', '==', true))
+      );
+      for (const d of snap.docs) {
+        ops.push((batch) => batch.delete(d.ref));
+      }
+    } catch {
+      // Continue if empty or collection not yet initialized
     }
   }
 

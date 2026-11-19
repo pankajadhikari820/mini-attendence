@@ -335,6 +335,14 @@ export const ReportsPage: React.FC = () => {
         ]),
         styles: { fontSize: 9 },
         headStyles: { fillColor: [194, 94, 0] },
+        didParseCell: (data) => {
+          if (data.section === 'body') {
+            const rec = filteredRecords[data.row.index];
+            if (rec?.method === 'manual') {
+              data.cell.styles.fillColor = [254, 249, 195];
+            }
+          }
+        },
       });
     }
 
@@ -493,73 +501,95 @@ export const ReportsPage: React.FC = () => {
           filteredRecords.length === 0 ? (
             <EmptyState title={t('reports.emptyTitle')} description={t('reports.emptyDesc')} />
           ) : (
-            <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500">
-                    <tr>
-                      <th className="py-3 px-4 font-medium">
-                        <button
-                          type="button"
-                          onClick={() => setSortBy('date')}
-                          className="hover:text-stone-900 dark:hover:text-stone-100"
-                        >
-                          {t('common.date')} {sortBy === 'date' ? '↓' : ''}
-                        </button>
-                      </th>
-                      <th className="py-3 px-4 font-medium">
-                        <button
-                          type="button"
-                          onClick={() => setSortBy('personName')}
-                          className="hover:text-stone-900 dark:hover:text-stone-100"
-                        >
-                          {t('common.name')} {sortBy === 'personName' ? '↓' : ''}
-                        </button>
-                      </th>
-                      <th className="py-3 px-4 font-medium">{t('common.memberId')}</th>
-                      <th className="py-3 px-4 font-medium">{t('common.status')}</th>
-                      <th className="py-3 px-4 font-medium">{t('reports.method')}</th>
-                      <th className="py-3 px-4 font-medium">{t('common.note')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
-                    {paginatedRecords.map((r) => (
-                      <tr key={r.id}>
-                        <td className="py-3 px-4 text-xs tabular-nums whitespace-nowrap">
-                          {formatDate(r.date)}
-                        </td>
-                        <td className="py-3 px-4 font-medium text-stone-900 dark:text-stone-100">
-                          {r.personName}
-                        </td>
-                        <td className="py-3 px-4 font-mono text-xs text-stone-500">
-                          {r.personMemberId || '—'}
-                        </td>
-                        <td className="py-3 px-4 text-xs font-semibold">
-                          <span
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                <span className="w-3 h-3 rounded-xs bg-amber-100 dark:bg-amber-900/60 border border-amber-300 dark:border-amber-700 shrink-0" />
+                <span>{t('reports.manualHighlightHint')}</span>
+              </div>
+
+              <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500">
+                      <tr>
+                        <th className="py-3 px-4 font-medium">
+                          <button
+                            type="button"
+                            onClick={() => setSortBy('date')}
+                            className="hover:text-stone-900 dark:hover:text-stone-100"
+                          >
+                            {t('common.date')} {sortBy === 'date' ? '↓' : ''}
+                          </button>
+                        </th>
+                        <th className="py-3 px-4 font-medium">
+                          <button
+                            type="button"
+                            onClick={() => setSortBy('personName')}
+                            className="hover:text-stone-900 dark:hover:text-stone-100"
+                          >
+                            {t('common.name')} {sortBy === 'personName' ? '↓' : ''}
+                          </button>
+                        </th>
+                        <th className="py-3 px-4 font-medium">{t('common.memberId')}</th>
+                        <th className="py-3 px-4 font-medium">{t('common.status')}</th>
+                        <th className="py-3 px-4 font-medium">{t('reports.method')}</th>
+                        <th className="py-3 px-4 font-medium">{t('common.note')}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
+                      {paginatedRecords.map((r) => {
+                        const isManual = r.method === 'manual';
+                        return (
+                          <tr
+                            key={r.id}
                             className={
-                              r.status === 'present'
-                                ? 'text-emerald-700 dark:text-emerald-400'
-                                : r.status === 'late'
-                                ? 'text-amber-700 dark:text-amber-400'
-                                : r.status === 'leave'
-                                ? 'text-sky-700 dark:text-sky-400'
-                                : 'text-red-700 dark:text-red-400'
+                              isManual
+                                ? 'bg-amber-50/80 dark:bg-amber-950/30'
+                                : undefined
                             }
                           >
-                            {t(`common.${r.status}`)}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-xs text-stone-500">
-                          {t(`common.${r.method}`)}
-                        </td>
-                        <td className="py-3 px-4 text-xs text-stone-500 max-w-xs truncate">
-                          {r.note || '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                            <td className="py-3 px-4 text-xs tabular-nums whitespace-nowrap">
+                              {formatDate(r.date)}
+                            </td>
+                            <td className="py-3 px-4 font-medium text-stone-900 dark:text-stone-100">
+                              {r.personName}
+                            </td>
+                            <td className="py-3 px-4 font-mono text-xs text-stone-500 dark:text-stone-400">
+                              {r.personMemberId || '—'}
+                            </td>
+                            <td className="py-3 px-4 text-xs font-semibold">
+                              <span
+                                className={
+                                  r.status === 'present'
+                                    ? 'text-emerald-700 dark:text-emerald-400'
+                                    : r.status === 'late'
+                                    ? 'text-amber-700 dark:text-amber-400'
+                                    : r.status === 'leave'
+                                    ? 'text-sky-700 dark:text-sky-400'
+                                    : 'text-red-700 dark:text-red-400'
+                                }
+                              >
+                                {t(`common.${r.status}`)}
+                              </span>
+                            </td>
+                            <td
+                              className={`py-3 px-4 text-xs whitespace-nowrap ${
+                                isManual
+                                  ? 'text-amber-800 dark:text-amber-300 font-semibold'
+                                  : 'text-stone-500 dark:text-stone-400'
+                              }`}
+                            >
+                              {t(`common.${r.method}`)}
+                            </td>
+                            <td className="py-3 px-4 text-xs text-stone-500 dark:text-stone-400 max-w-xs truncate">
+                              {r.note || '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
 
               {totalPages > 1 && (
                 <div className="px-4 py-3 border-t border-stone-200 dark:border-stone-800 flex items-center justify-between text-xs text-stone-500">
@@ -587,6 +617,7 @@ export const ReportsPage: React.FC = () => {
                   </div>
                 </div>
               )}
+              </div>
             </div>
           )
         ) : view === 'summary' ? (

@@ -23,7 +23,7 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
   const qrValue = JSON.stringify({
     orgId: org.id,
     uid: person.uid,
-    memberId: person.memberId,
+    id: person.memberId,
   });
 
   const handleDownloadQR = () => {

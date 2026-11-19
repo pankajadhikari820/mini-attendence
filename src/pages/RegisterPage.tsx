@@ -10,7 +10,7 @@ import {
   lookupOrgCode,
 } from '../services/orgService';
 import { selfRegisterUser } from '../services/userService';
-import { getFirebaseErrorKey } from '../utils/helpers';
+import { getFirebaseErrorKey, needsEnglishNameForId } from '../utils/helpers';
 import { Logo } from '../components/Logo';
 import { LanguageToggle } from '../components/LanguageToggle';
 import { ThemeToggle } from '../components/ThemeToggle';
@@ -30,10 +30,13 @@ export const RegisterPage: React.FC = () => {
   const [orgName, setOrgName] = useState('');
   const [orgType, setOrgType] = useState<OrgType>('College');
   const [adminName, setAdminName] = useState('');
+  const [englishName, setEnglishName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  const showEnglishNameField = needsEnglishNameForId(adminName);
 
   // Join Org fields
   const [joinRole, setJoinRole] = useState<'manager' | 'member'>('member');
@@ -86,12 +89,17 @@ export const RegisterPage: React.FC = () => {
       setError(t('errors.weakPassword'));
       return;
     }
+    if (showEnglishNameField && needsEnglishNameForId(englishName)) {
+      setError(t('errors.englishNameRequired'));
+      return;
+    }
     setSubmitting(true);
     try {
       await createOrganizationAndAdmin({
         orgName,
         orgType,
         adminName,
+        englishName: showEnglishNameField ? englishName.trim() : undefined,
         email,
         password,
         phone,
@@ -116,6 +124,10 @@ export const RegisterPage: React.FC = () => {
     }
     if (password.length < 6) {
       setError(t('errors.weakPassword'));
+      return;
+    }
+    if (showEnglishNameField && needsEnglishNameForId(englishName)) {
+      setError(t('errors.englishNameRequired'));
       return;
     }
 
@@ -147,6 +159,7 @@ export const RegisterPage: React.FC = () => {
         managerId: joinRole === 'member' ? mgrLookup!.managerUid : null,
         parentNotifyUid: joinRole === 'member' ? mgrLookup!.managerUid : null,
         name: adminName,
+        englishName: showEnglishNameField ? englishName.trim() : undefined,
         email,
         password,
         phone,
@@ -282,6 +295,25 @@ export const RegisterPage: React.FC = () => {
                   />
                 </div>
               </div>
+
+              {showEnglishNameField && (
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
+                    {t('common.englishNameLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={englishName}
+                    onChange={(e) => setEnglishName(e.target.value)}
+                    placeholder="e.g. Pankaj Sharma"
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
+                  />
+                  <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                    {t('common.englishNameHint')}
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
@@ -439,6 +471,25 @@ export const RegisterPage: React.FC = () => {
                   />
                 </div>
               </div>
+
+              {showEnglishNameField && (
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
+                    {t('common.englishNameLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={englishName}
+                    onChange={(e) => setEnglishName(e.target.value)}
+                    placeholder="e.g. Rahul Verma"
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
+                  />
+                  <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                    {t('common.englishNameHint')}
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>

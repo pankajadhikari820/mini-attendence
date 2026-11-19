@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -14,6 +14,8 @@ export const LoginPage: React.FC = () => {
   const { user, profile } = useAuth();
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
+  const redirectFrom = (location.state as { from?: string } | null)?.from;
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,11 +26,23 @@ export const LoginPage: React.FC = () => {
     if (user && profile) {
       if (profile.status === 'pending' || profile.status === 'inactive') {
         navigate('/pending', { replace: true });
+      } else if (
+        redirectFrom &&
+        redirectFrom.startsWith('/') &&
+        !redirectFrom.startsWith('/login') &&
+        !redirectFrom.startsWith('/register') &&
+        !redirectFrom.startsWith('/pending')
+      ) {
+        if (redirectFrom.startsWith('/mark') && profile.role === 'admin') {
+          navigate('/attendance', { replace: true });
+        } else {
+          navigate(redirectFrom, { replace: true });
+        }
       } else {
         navigate(getHomePathForRole(profile.role), { replace: true });
       }
     }
-  }, [user, profile, navigate]);
+  }, [user, profile, navigate, redirectFrom]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

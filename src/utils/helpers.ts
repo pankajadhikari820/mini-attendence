@@ -10,14 +10,65 @@ export function generateCode(length = 6): string {
   return out;
 }
 
-export function buildOrgPrefix(orgName: string): string {
-  const cleaned = orgName.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-  return (cleaned.slice(0, 3) || 'ORG').padEnd(3, 'X');
+/**
+ * Generates a cryptographically strong 128-bit hex token using crypto.getRandomValues.
+ */
+export function generateSessionToken(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export function formatMemberId(prefix: string, role: 'manager' | 'member', num: number): string {
-  const rolePart = role === 'manager' ? 'MGR' : 'MEM';
-  return `${prefix}-${rolePart}-${String(num).padStart(4, '0')}`;
+/**
+ * Generates a random 6-digit numeric code (000000 - 999999) using crypto.getRandomValues.
+ */
+export function generateSixDigitCode(): string {
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  return String(arr[0] % 1000000).padStart(6, '0');
+}
+
+/**
+ * Extracts first 3 uppercase English letters from a name (ignoring spaces/symbols, padding with X).
+ */
+export function extractIdPrefixFromName(name: string): string {
+  const letters = name.replace(/[^A-Za-z]/g, '').toUpperCase();
+  return letters.slice(0, 3).padEnd(3, 'X');
+}
+
+/**
+ * Checks whether a name contains no English letters (e.g., typed in Hindi/Devanagari)
+ * so the UI can prompt for English spelling to generate the 6-char ID.
+ */
+export function needsEnglishNameForId(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  return trimmed.replace(/[^A-Za-z]/g, '').length === 0;
+}
+
+/**
+ * Generates a candidate 6-char ID like PAN482 (3 uppercase letters + 3 digits).
+ */
+export function generateCandidateUserId(prefix: string): string {
+  const cleanPrefix = prefix.replace(/[^A-Z]/g, '').slice(0, 3).padEnd(3, 'X');
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  const digits = String(arr[0] % 1000).padStart(3, '0');
+  return `${cleanPrefix}${digits}`;
+}
+
+/**
+ * Stable random device identifier stored in localStorage to enforce
+ * "one device = one person per session".
+ */
+export function getOrCreateDeviceId(): string {
+  const key = 'sas_device_id';
+  let id = localStorage.getItem(key);
+  if (!id || id.length < 16) {
+    id = generateSessionToken();
+    localStorage.setItem(key, id);
+  }
+  return id;
 }
 
 export function getOrgDateString(timezone = 'Asia/Kolkata', dateObj = new Date()): string {
@@ -73,16 +124,42 @@ export function getDistanceMeters(
   return Math.round(R * c);
 }
 
-export function getCurrentPosition(): Promise<{ lat: number; lng: number }> {
+/**
+ * Matches the flat-earth distance calculation performed inside Firestore rules.
+ */
+export function getFlatEarthDistanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+  cosLat: number
+): number {
+  const dLat = (lat1 - lat2) * 111320;
+  const dLng = (lng1 - lng2) * 111320 * cosLat;
+  return Math.round(Math.sqrt(dLat * dLat + dLng * dLng));
+}
+
+export interface GeoReading {
+  lat: number;
+  lng: number;
+  accuracy: number;
+}
+
+export function getCurrentPosition(): Promise<GeoReading> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error('GEOLOCATION_UNSUPPORTED'));
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (pos) =>
+        resolve({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy || 0),
+        }),
       (err) => reject(err),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 15000 }
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 }
     );
   });
 }
@@ -108,7 +185,7 @@ export function playBeep(success = true): void {
     osc.start();
     osc.stop(ctx.currentTime + 0.24);
   } catch {
-    // AudioContext may be blocked before interaction
+    // Ignore audio context restriction
   }
 }
 

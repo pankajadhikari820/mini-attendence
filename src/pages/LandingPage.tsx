@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { QRCodeSVG } from 'qrcode.react';
 import {
-  Check,
   ChevronDown,
   Menu,
   X,
   ArrowRight,
   Send,
+  QrCode,
+  KeyRound,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -276,47 +276,35 @@ export const LandingPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Mock QR Card Preview */}
+          {/* Mark Your Attendance Card */}
           <div className="lg:col-span-5 flex justify-center lg:justify-end">
-            <div className="w-full max-w-sm rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-6 shadow-sm">
-              <div className="flex items-center justify-between text-xs text-stone-500 dark:text-stone-400 pb-4 border-b border-stone-100 dark:border-stone-800">
-                <span className="font-medium text-stone-700 dark:text-stone-300">
-                  {t('landing.mockOrg')}
-                </span>
-                <span className="font-mono">{t('landing.mockId')}</span>
+            <div className="w-full max-w-sm rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-7 shadow-sm">
+              <div className="w-11 h-11 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-900/60 flex items-center justify-center text-[#C25E00]">
+                <QrCode className="w-5 h-5" />
               </div>
 
-              <div className="my-6 flex flex-col items-center">
-                <div className="p-4 rounded-xl bg-white border border-stone-200">
-                  <QRCodeSVG
-                    value={JSON.stringify({
-                      orgId: 'stx-college',
-                      uid: 'sample-aarav',
-                      memberId: 'STX-MEM-0042',
-                    })}
-                    size={164}
-                    fgColor="#1C1917"
-                    bgColor="#FFFFFF"
-                    level="M"
-                  />
-                </div>
-                <p className="mt-4 text-lg font-semibold text-stone-900 dark:text-stone-100">
-                  {t('landing.mockName')}
-                </p>
-              </div>
+              <h2 className="mt-5 text-2xl font-bold tracking-tight text-stone-900 dark:text-stone-50">
+                {t('landing.markCardTitle')}
+              </h2>
+              <p className="mt-2 text-sm text-stone-600 dark:text-stone-400 leading-relaxed">
+                {t('landing.markCardSubtitle')}
+              </p>
 
-              <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 px-4 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                    <Check className="w-3.5 h-3.5" />
-                  </span>
-                  <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
-                    {t('landing.mockPresent')}
-                  </span>
-                </div>
-                <span className="text-xs text-emerald-700/80 dark:text-emerald-400 tabular-nums">
-                  {t('landing.mockTime')}
-                </span>
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <Link
+                  to="/mark?tab=scan"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap"
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span>{t('landing.markCardScanBtn')}</span>
+                </Link>
+                <Link
+                  to="/mark?tab=code"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-800 dark:text-stone-100 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap"
+                >
+                  <KeyRound className="w-4 h-4 shrink-0" />
+                  <span>{t('landing.markCardIdBtn')}</span>
+                </Link>
               </div>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { ChevronLeft, ChevronRight, QrCode } from 'lucide-react';
+import { ChevronLeft, ChevronRight, KeyRound, QrCode, ScanLine } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
@@ -119,7 +120,7 @@ export const MemberDashboard: React.FC = () => {
 
   const qrValue =
     org && profile
-      ? JSON.stringify({ orgId: org.id, uid: profile.uid, memberId: profile.memberId })
+      ? JSON.stringify({ orgId: org.id, uid: profile.uid, id: profile.memberId })
       : '';
 
   const cellColors = (status?: string) => {
@@ -140,6 +141,34 @@ export const MemberDashboard: React.FC = () => {
   return (
     <Layout title={t('nav.myQr')}>
       <div className="space-y-8">
+        {/* Quick Mark Attendance Banner */}
+        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight text-stone-900 dark:text-stone-50">
+              {t('mark.title')}
+            </h2>
+            <p className="mt-0.5 text-sm text-stone-500 dark:text-stone-400">
+              {t('landing.markCardSubtitle')}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <Link
+              to="/mark?tab=scan"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <ScanLine className="w-4 h-4" />
+              <span>{t('landing.markCardScanBtn')}</span>
+            </Link>
+            <Link
+              to="/mark?tab=code"
+              className="inline-flex items-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-800 dark:text-stone-100 px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>{t('landing.markCardIdBtn')}</span>
+            </Link>
+          </div>
+        </div>
+
         {/* Top Row: QR Card + Key Metrics */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           <div className="lg:col-span-5 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-6 flex flex-col items-center justify-between text-center">

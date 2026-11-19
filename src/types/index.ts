@@ -4,9 +4,10 @@ export type UserRole = 'admin' | 'manager' | 'member';
 export type UserStatus = 'pending' | 'active' | 'inactive';
 export type OrgType = 'College' | 'School' | 'Coaching' | 'Company' | 'Other';
 export type AttendanceStatus = 'present' | 'absent' | 'late' | 'leave';
-export type AttendanceMethod = 'qr' | 'manual';
+export type AttendanceMethod = 'live_qr' | 'live_code' | 'qr' | 'manual';
 export type LeaveStatus = 'pending' | 'approved' | 'rejected';
 export type LanguageCode = 'en' | 'hi';
+export type SessionStatus = 'open' | 'closed';
 
 export interface RoleLabels {
   manager: string;
@@ -16,8 +17,8 @@ export interface RoleLabels {
 export interface OrgLocation {
   lat: number;
   lng: number;
-  radius: number; // in meters
-  enabled: boolean;
+  radius: number; // default radius in meters (20-500)
+  enabled: boolean; // default ON (true)
 }
 
 export interface Organization {
@@ -30,6 +31,7 @@ export interface Organization {
   lateAfter: string; // "HH:MM" e.g. "09:30"
   timezone: string; // e.g. "Asia/Kolkata"
   location: OrgLocation;
+  defaultSessionDuration?: number; // 15 | 30 | 60 | 120 minutes
   lowAttendanceThreshold: number; // default 75
   counters: {
     manager: number;
@@ -42,13 +44,14 @@ export interface Organization {
 export interface UserProfile {
   uid: string;
   name: string;
+  englishName?: string;
   email: string;
   phone: string;
   rollNumber?: string;
   role: UserRole;
   orgId: string;
   managerId: string | null;
-  memberId: string;
+  memberId: string; // 6-char unique ID e.g. PAN482
   status: UserStatus;
   managerCode?: string;
   language: LanguageCode;
@@ -70,7 +73,61 @@ export interface AttendanceRecord {
   method: AttendanceMethod;
   markedBy: string;
   note: string;
+  sessionId?: string;
+  lat?: number;
+  lng?: number;
+  accuracy?: number;
+  distanceMeters?: number;
+  deviceId?: string;
+  submittedToken?: string;
+  submittedCode?: string;
   isDemo?: boolean;
+}
+
+export interface SessionLocation {
+  lat: number;
+  lng: number;
+  cosLat: number;
+  radius: number; // meters (20-500)
+}
+
+export interface AttendanceSession {
+  id: string;
+  orgId: string;
+  ownerUid: string;
+  ownerName: string;
+  ownerRole: 'admin' | 'manager';
+  title: string;
+  status: SessionStatus;
+  durationMinutes: number;
+  locationCheckEnabled: boolean;
+  location: SessionLocation;
+  markedCount: number;
+  startedAt?: Timestamp | null;
+  endsAt?: Timestamp | null;
+}
+
+export interface SessionSecret {
+  ownerUid: string;
+  orgId: string;
+  token: string;
+  prevToken: string;
+  code: string;
+  prevCode: string;
+  tokenUpdatedAt?: Timestamp | null;
+}
+
+export interface AttendanceAttempt {
+  id: string;
+  orgId: string;
+  sessionId: string;
+  ownerUid: string;
+  personUid: string;
+  personName: string;
+  personId: string;
+  reason: string;
+  distance: number | null;
+  time?: Timestamp | null;
 }
 
 export interface LeaveRequest {
@@ -81,8 +138,8 @@ export interface LeaveRequest {
   personRole: 'manager' | 'member';
   personMemberId?: string;
   toUid: string;
-  fromDate: string; // YYYY-MM-DD
-  toDate: string; // YYYY-MM-DD
+  fromDate: string;
+  toDate: string;
   reason: string;
   status: LeaveStatus;
   comment: string;
@@ -97,7 +154,7 @@ export interface Announcement {
   fromName: string;
   fromRole: 'admin' | 'manager';
   audience: 'all' | 'managers' | 'members';
-  managerId: string | null; // set when a Manager posts to their own members
+  managerId: string | null;
   text: string;
   isDemo?: boolean;
   createdAt?: Timestamp | null;
@@ -124,7 +181,13 @@ export interface ContactMessage {
 export interface QRPayload {
   orgId: string;
   uid: string;
-  memberId: string;
+  id?: string;
+  memberId?: string;
+}
+
+export interface LiveSessionQRPayload {
+  s: string; // sessionId
+  t: string; // rotating 128-bit token
 }
 
 export interface OrgCodeLookup {

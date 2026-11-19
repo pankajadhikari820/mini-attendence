@@ -9,7 +9,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts';
-import { Check, Copy, QrCode, ScanLine, X } from 'lucide-react';
+import { Check, CheckCircle2, Copy, QrCode, ScanLine, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
@@ -196,8 +196,16 @@ export const ManagerDashboard: React.FC = () => {
             </button>
 
             <Link
+              to="/mark"
+              className="inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] hover:bg-stone-50 dark:hover:bg-stone-800 px-3.5 py-2.5 text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>{t('nav.markYourAttendance')}</span>
+            </Link>
+
+            <Link
               to="/attendance"
-              className="inline-flex items-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap"
             >
               <ScanLine className="w-4 h-4" />
               <span>{t('dashboard.markNow')}</span>

@@ -16,7 +16,8 @@ import type {
   Organization,
   OrgType,
 } from '../types';
-import { buildOrgPrefix, generateCode, getDefaultRoleLabels } from '../utils/helpers';
+import { generateCode, getDefaultRoleLabels } from '../utils/helpers';
+import { allocateUniqueUserId } from './userService';
 
 export async function generateUniqueOrgCode(): Promise<string> {
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -33,11 +34,12 @@ export async function createOrganizationAndAdmin(params: {
   orgName: string;
   orgType: OrgType;
   adminName: string;
+  englishName?: string;
   email: string;
   password: string;
   phone: string;
   language: LanguageCode;
-}): Promise<{ orgId: string; orgCode: string; uid: string }> {
+}): Promise<{ orgId: string; orgCode: string; uid: string; adminId: string }> {
   const email = params.email.trim().toLowerCase();
   const orgCode = await generateUniqueOrgCode();
 
@@ -47,7 +49,13 @@ export async function createOrganizationAndAdmin(params: {
   const orgRef = doc(collection(db, 'organizations'));
   const orgId = orgRef.id;
   const roleLabels = getDefaultRoleLabels(params.orgType);
-  const prefix = buildOrgPrefix(params.orgName);
+
+  const adminId = await allocateUniqueUserId({
+    nameForId: params.englishName?.trim() || params.adminName,
+    uid,
+    orgId,
+    role: 'admin',
+  });
 
   const batch = writeBatch(db);
 
@@ -59,11 +67,12 @@ export async function createOrganizationAndAdmin(params: {
     roleLabels,
     lateAfter: '09:30',
     timezone: 'Asia/Kolkata',
+    defaultSessionDuration: 30,
     location: {
       lat: 0,
       lng: 0,
-      radius: 200,
-      enabled: false,
+      radius: 50,
+      enabled: true, // Location check default ON
     },
     lowAttendanceThreshold: 75,
     counters: {
@@ -83,12 +92,13 @@ export async function createOrganizationAndAdmin(params: {
   batch.set(doc(db, 'users', uid), {
     uid,
     name: params.adminName.trim(),
+    ...(params.englishName?.trim() ? { englishName: params.englishName.trim() } : {}),
     email,
     phone: params.phone.trim(),
     role: 'admin',
     orgId,
     managerId: null,
-    memberId: `${prefix}-ADM-0001`,
+    memberId: adminId,
     status: 'active',
     language: params.language,
     createdAt: serverTimestamp(),
@@ -96,7 +106,7 @@ export async function createOrganizationAndAdmin(params: {
 
   await batch.commit();
 
-  return { orgId, orgCode, uid };
+  return { orgId, orgCode, uid, adminId };
 }
 
 export async function lookupOrgCode(code: string): Promise<OrgCodeLookup | null> {

@@ -39,7 +39,7 @@ export async function verifyLocationCheck(
   try {
     const pos = await getCurrentPosition();
     const distance = getDistanceMeters(pos.lat, pos.lng, org.location.lat, org.location.lng);
-    if (distance > (org.location.radius || 200)) {
+    if (distance > (org.location.radius || 50)) {
       return { ok: false, reason: 'locationTooFar', distance };
     }
     return { ok: true };
@@ -68,6 +68,10 @@ export interface QRScanResult {
   distance?: number;
 }
 
+/**
+ * Backup ID-Card QR scanner used by Admin/Manager (e.g. when a member has a dead phone or no GPS).
+ * Tagged as method: "manual" so reports highlight backup entries cleanly in yellow.
+ */
 export async function markAttendanceViaQR(params: {
   rawText: string;
   org: Organization;
@@ -89,13 +93,6 @@ export async function markAttendanceViaQR(params: {
     return { ok: false, code: 'wrongOrg' };
   }
 
-  if (!params.skipLocationCheck) {
-    const locCheck = await verifyLocationCheck(params.org);
-    if (!locCheck.ok) {
-      return { ok: false, code: locCheck.reason, distance: locCheck.distance };
-    }
-  }
-
   const personSnap = await getDoc(doc(db, 'users', payload.uid));
   if (!personSnap.exists()) {
     return { ok: false, code: 'userNotFound' };
@@ -110,7 +107,6 @@ export async function markAttendanceViaQR(params: {
     return { ok: false, code: 'userInactive', personName: person.name, memberId: person.memberId };
   }
 
-  // Strict hierarchy check: Admin -> Managers only; Manager -> own Members only
   const isDirectParent =
     (params.marker.role === 'admin' && person.role === 'manager') ||
     (params.marker.role === 'manager' &&
@@ -152,9 +148,9 @@ export async function markAttendanceViaQR(params: {
     date,
     timestamp: serverTimestamp(),
     status,
-    method: 'qr' as AttendanceMethod,
+    method: 'manual' as AttendanceMethod,
     markedBy: params.marker.uid,
-    note: '',
+    note: 'ID Card QR backup',
   });
 
   return {
