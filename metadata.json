@@ -1,0 +1,6 @@
+{
+  "name": "Smart Attendance System",
+  "description": "Multi-organization QR-based attendance platform for colleges, schools, coaching institutes, and companies.",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

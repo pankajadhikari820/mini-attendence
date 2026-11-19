@@ -1,0 +1,240 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasProfile() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isActive() {
+      return hasProfile() && myUser().status == 'active';
+    }
+
+    function isOrgAdmin(orgId) {
+      return isActive() && myUser().orgId == orgId && myUser().role == 'admin';
+    }
+
+    function isOrgManager(orgId) {
+      return isActive() && myUser().orgId == orgId && myUser().role == 'manager';
+    }
+
+    function inSameOrg(orgId) {
+      return hasProfile() && myUser().orgId == orgId;
+    }
+
+    function userImmutableFieldsUnchanged() {
+      return request.resource.data.role == resource.data.role
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.managerId == resource.data.managerId
+        && request.resource.data.memberId == resource.data.memberId
+        && request.resource.data.uid == resource.data.uid;
+    }
+
+    // Public lookup tables for self-registration (get by exact code only, NO list)
+    match /orgCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn() && isOrgAdmin(resource.data.orgId);
+    }
+
+    match /managerCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isSignedIn() && (
+        isOrgAdmin(request.resource.data.orgId) ||
+        (isOrgManager(request.resource.data.orgId) && request.resource.data.managerUid == request.auth.uid)
+      );
+      allow update, delete: if isSignedIn() && (
+        isOrgAdmin(resource.data.orgId) ||
+        resource.data.managerUid == request.auth.uid
+      );
+    }
+
+    // Public contact form messages (create-only for public)
+    match /messages/{msgId} {
+      allow create: if request.resource.data.keys().hasAll(['name', 'email', 'message'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+        && request.resource.data.email is string && request.resource.data.email.size() > 3 && request.resource.data.email.size() <= 180
+        && request.resource.data.message is string && request.resource.data.message.size() > 0 && request.resource.data.message.size() <= 2000;
+      allow read, update, delete: if false;
+    }
+
+    // Organizations
+    match /organizations/{orgId} {
+      allow read: if inSameOrg(orgId);
+      allow create: if isSignedIn() && request.resource.data.adminUid == request.auth.uid;
+      allow update: if isOrgAdmin(orgId)
+        // Managers may increment member counter in transaction when adding a member
+        || (isOrgManager(orgId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['counters']));
+      allow delete: if isOrgAdmin(orgId);
+    }
+
+    // Users
+    match /users/{uid} {
+      // Read rules:
+      // - Self can always read own profile
+      // - Org Admin reads everyone in their org
+      // - Org Manager reads only themselves, their org Admin, or their own Members
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid
+        || (hasProfile() && myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
+        || (hasProfile() && myUser().role == 'manager' && myUser().orgId == resource.data.orgId && (
+              resource.data.managerId == request.auth.uid || resource.data.role == 'admin'
+           ))
+      );
+
+      // Create rules:
+      // - New Org Admin creating their own admin doc
+      // - Self-registration creating own pending manager/member doc
+      // - Active Org Admin creating manager/member (or demo users) inside own org
+      // - Active Org Manager creating their own member inside own org
+      allow create: if isSignedIn() && (
+        (request.auth.uid == uid && request.resource.data.uid == uid && request.resource.data.role == 'admin' && request.resource.data.status == 'active')
+        || (request.auth.uid == uid && request.resource.data.uid == uid && request.resource.data.status == 'pending' && request.resource.data.role in ['manager', 'member'])
+        || isOrgAdmin(request.resource.data.orgId)
+        || (isOrgManager(request.resource.data.orgId) && request.resource.data.role == 'member' && request.resource.data.managerId == request.auth.uid)
+      );
+
+      // Update rules:
+      // - Self can only update non-privileged fields (name, phone, language, rollNumber)
+      // - Org Admin can update anyone in their org
+      // - Org Manager can update their own Members (e.g., approve/deactivate/edit) without elevating role
+      allow update: if isSignedIn() && (
+        (request.auth.uid == uid && userImmutableFieldsUnchanged())
+        || isOrgAdmin(resource.data.orgId)
+        || (isOrgManager(resource.data.orgId)
+            && resource.data.role == 'member'
+            && resource.data.managerId == request.auth.uid
+            && request.resource.data.role == 'member'
+            && request.resource.data.orgId == resource.data.orgId
+            && request.resource.data.managerId == request.auth.uid)
+      );
+
+      // Delete rules:
+      allow delete: if isSignedIn() && (
+        isOrgAdmin(resource.data.orgId)
+        || (isOrgManager(resource.data.orgId) && resource.data.role == 'member' && resource.data.managerId == request.auth.uid)
+      );
+    }
+
+    // Attendance: deterministic ID {orgId}_{date}_{personUid}
+    match /attendance/{recordId} {
+      allow read: if isSignedIn() && hasProfile() && (
+        (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
+        || (myUser().role == 'manager' && myUser().orgId == resource.data.orgId && (
+              resource.data.managerId == request.auth.uid || resource.data.personUid == request.auth.uid
+           ))
+        || (myUser().role == 'member' && resource.data.personUid == request.auth.uid)
+      );
+
+      // Only direct parent can mark attendance for active people (Admin can also create demo data in own org)
+      allow create: if isActive()
+        && request.resource.data.orgId == myUser().orgId
+        && request.resource.data.status in ['present', 'absent', 'late', 'leave']
+        && request.resource.data.method in ['qr', 'manual']
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.personUid))
+        && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.orgId == myUser().orgId
+        && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.status == 'active'
+        && (
+          // Admin marking a Manager (or Admin seeding demo attendance)
+          (myUser().role == 'admin' && (
+            get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'manager'
+            || request.resource.data.isDemo == true
+          ))
+          // Manager marking their own Member
+          || (myUser().role == 'manager'
+              && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'member'
+              && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.managerId == request.auth.uid)
+        );
+
+      // Update: Admin can correct any day in own org; Manager can correct own Members' records
+      allow update: if isActive()
+        && resource.data.orgId == myUser().orgId
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.personUid == resource.data.personUid
+        && request.resource.data.status in ['present', 'absent', 'late', 'leave']
+        && (
+          myUser().role == 'admin'
+          || (myUser().role == 'manager' && resource.data.managerId == request.auth.uid)
+        );
+
+      allow delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    // Leave Requests
+    match /leaves/{leaveId} {
+      allow read: if isSignedIn() && hasProfile() && (
+        (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
+        || resource.data.personUid == request.auth.uid
+        || resource.data.toUid == request.auth.uid
+      );
+
+      allow create: if isActive()
+        && request.resource.data.orgId == myUser().orgId
+        && (
+          (request.resource.data.personUid == request.auth.uid && request.resource.data.status == 'pending')
+          || (myUser().role == 'admin' && request.resource.data.isDemo == true)
+        );
+
+      allow update: if isActive()
+        && resource.data.orgId == myUser().orgId
+        && (
+          myUser().role == 'admin'
+          || resource.data.toUid == request.auth.uid
+        );
+
+      allow delete: if isOrgAdmin(resource.data.orgId) || resource.data.personUid == request.auth.uid;
+    }
+
+    // Announcements
+    match /announcements/{annId} {
+      allow read: if isActive() && myUser().orgId == resource.data.orgId && (
+        myUser().role == 'admin'
+        || resource.data.audience == 'all'
+        || (myUser().role == 'manager' && (resource.data.audience == 'managers' || resource.data.fromUid == request.auth.uid))
+        || (myUser().role == 'member' && resource.data.audience == 'members' && (resource.data.managerId == null || resource.data.managerId == myUser().managerId))
+      );
+
+      allow create: if isActive()
+        && request.resource.data.orgId == myUser().orgId
+        && (myUser().role == 'admin' || myUser().role == 'manager');
+
+      allow update, delete: if isActive()
+        && resource.data.orgId == myUser().orgId
+        && (myUser().role == 'admin' || resource.data.fromUid == request.auth.uid);
+    }
+
+    // Notifications
+    match /notifications/{notifId} {
+      allow read: if isSignedIn() && (
+        resource.data.toUid == request.auth.uid
+        || isOrgAdmin(resource.data.orgId)
+      );
+
+      allow create: if isSignedIn() && (
+        hasProfile() && myUser().orgId == request.resource.data.orgId
+      );
+
+      allow update: if isSignedIn() && (
+        (resource.data.toUid == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']))
+        || isOrgAdmin(resource.data.orgId)
+      );
+
+      allow delete: if isSignedIn() && (
+        resource.data.toUid == request.auth.uid
+        || isOrgAdmin(resource.data.orgId)
+      );
+    }
+  }
+}
