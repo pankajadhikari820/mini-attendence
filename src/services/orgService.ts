@@ -15,8 +15,10 @@ import type {
   OrgCodeLookup,
   Organization,
   OrgType,
+  UserProfile,
 } from '../types';
 import { generateCode, getDefaultRoleLabels } from '../utils/helpers';
+import { recordAuditLog } from './auditService';
 import { allocateUniqueUserId } from './userService';
 
 export async function generateUniqueOrgCode(): Promise<string> {
@@ -65,20 +67,20 @@ export async function createOrganizationAndAdmin(params: {
     orgCode,
     adminUid: uid,
     roleLabels,
-    lateAfter: '09:30',
     timezone: 'Asia/Kolkata',
-    defaultSessionDuration: 30,
+    defaultSessionDuration: 45,
     location: {
       lat: 0,
       lng: 0,
       radius: 50,
-      enabled: true, // Location check default ON
+      enabled: true,
     },
     lowAttendanceThreshold: 75,
     counters: {
       manager: 0,
       member: 0,
     },
+    status: 'active',
     hasDemoData: false,
     createdAt: serverTimestamp(),
   });
@@ -128,7 +130,8 @@ export async function lookupManagerCode(code: string): Promise<ManagerCodeLookup
 export async function updateOrganization(
   orgId: string,
   orgCode: string,
-  updates: Partial<Omit<Organization, 'id' | 'orgCode' | 'adminUid' | 'createdAt'>>
+  updates: Partial<Omit<Organization, 'id' | 'orgCode' | 'adminUid' | 'createdAt'>>,
+  actor?: UserProfile | null
 ): Promise<void> {
   await updateDoc(doc(db, 'organizations', orgId), updates as Record<string, unknown>);
   if (updates.name || updates.roleLabels) {
@@ -136,5 +139,14 @@ export async function updateOrganization(
     if (updates.name) codePatch.orgName = updates.name;
     if (updates.roleLabels) codePatch.roleLabels = updates.roleLabels;
     await setDoc(doc(db, 'orgCodes', orgCode), codePatch, { merge: true });
+  }
+  if (actor) {
+    await recordAuditLog({
+      actor,
+      action: 'settings.updated',
+      targetCollection: 'organizations',
+      targetId: orgId,
+      summary: `Updated organization settings (${Object.keys(updates).join(', ')})`,
+    });
   }
 }

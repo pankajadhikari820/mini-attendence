@@ -12,10 +12,14 @@ import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { PendingApprovalPage } from './pages/PendingApprovalPage';
+import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { ManageManagersPage } from './pages/ManageManagersPage';
 import { ManagerDashboard } from './pages/ManagerDashboard';
 import { ManageMembersPage } from './pages/ManageMembersPage';
+import { AcademicsPage } from './pages/AcademicsPage';
+import { TimetablePage } from './pages/TimetablePage';
+import { AuditLogsPage } from './pages/AuditLogsPage';
 import { StartAttendancePage } from './pages/StartAttendancePage';
 import { MarkAttendancePage } from './pages/MarkAttendancePage';
 import { MarkYourAttendancePage } from './pages/MarkYourAttendancePage';
@@ -23,6 +27,7 @@ import { LeavesPage } from './pages/LeavesPage';
 import { AnnouncementsPage } from './pages/AnnouncementsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { MemberDashboard } from './pages/MemberDashboard';
+import { ParentDashboard } from './pages/ParentDashboard';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
@@ -60,11 +65,21 @@ export default function App() {
                   }
                 />
 
-                {/* Admin */}
+                {/* Super Admin */}
+                <Route
+                  path="/super-admin"
+                  element={
+                    <ProtectedRoute allowedRoles={['super_admin']}>
+                      <SuperAdminDashboard />
+                    </ProtectedRoute>
+                  }
+                />
+
+                {/* Admin & Super Admin */}
                 <Route
                   path="/admin"
                   element={
-                    <ProtectedRoute allowedRoles={['admin']}>
+                    <ProtectedRoute allowedRoles={['admin', 'super_admin']}>
                       <AdminDashboard />
                     </ProtectedRoute>
                   }
@@ -72,7 +87,7 @@ export default function App() {
                 <Route
                   path="/admin/managers"
                   element={
-                    <ProtectedRoute allowedRoles={['admin']}>
+                    <ProtectedRoute allowedRoles={['admin', 'super_admin']}>
                       <ManageManagersPage />
                     </ProtectedRoute>
                   }
@@ -80,13 +95,29 @@ export default function App() {
                 <Route
                   path="/admin/members"
                   element={
-                    <ProtectedRoute allowedRoles={['admin']}>
+                    <ProtectedRoute allowedRoles={['admin', 'super_admin']}>
                       <ManageMembersPage adminView />
                     </ProtectedRoute>
                   }
                 />
+                <Route
+                  path="/academics"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin', 'super_admin']}>
+                      <AcademicsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/audit-logs"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin', 'super_admin']}>
+                      <AuditLogsPage />
+                    </ProtectedRoute>
+                  }
+                />
 
-                {/* Manager */}
+                {/* Manager / Teacher */}
                 <Route
                   path="/manager"
                   element={
@@ -104,7 +135,7 @@ export default function App() {
                   }
                 />
 
-                {/* Member */}
+                {/* Member / Student */}
                 <Route
                   path="/member"
                   element={
@@ -114,11 +145,31 @@ export default function App() {
                   }
                 />
 
+                {/* Parent (Read-Only Portal) */}
+                <Route
+                  path="/parent"
+                  element={
+                    <ProtectedRoute allowedRoles={['parent']}>
+                      <ParentDashboard />
+                    </ProtectedRoute>
+                  }
+                />
+
                 {/* Shared Authenticated Routes */}
+                <Route
+                  path="/timetable"
+                  element={
+                    <ProtectedRoute
+                      allowedRoles={['super_admin', 'admin', 'manager', 'member', 'parent']}
+                    >
+                      <TimetablePage />
+                    </ProtectedRoute>
+                  }
+                />
                 <Route
                   path="/attendance"
                   element={
-                    <ProtectedRoute allowedRoles={['admin', 'manager']}>
+                    <ProtectedRoute allowedRoles={['super_admin', 'admin', 'manager']}>
                       <StartAttendancePage />
                     </ProtectedRoute>
                   }
@@ -126,7 +177,7 @@ export default function App() {
                 <Route
                   path="/attendance/manual"
                   element={
-                    <ProtectedRoute allowedRoles={['admin', 'manager']}>
+                    <ProtectedRoute allowedRoles={['super_admin', 'admin', 'manager']}>
                       <MarkAttendancePage />
                     </ProtectedRoute>
                   }
@@ -142,7 +193,7 @@ export default function App() {
                 <Route
                   path="/reports"
                   element={
-                    <ProtectedRoute allowedRoles={['admin', 'manager']}>
+                    <ProtectedRoute allowedRoles={['super_admin', 'admin', 'manager']}>
                       <ReportsPage />
                     </ProtectedRoute>
                   }
@@ -150,7 +201,7 @@ export default function App() {
                 <Route
                   path="/leaves"
                   element={
-                    <ProtectedRoute allowedRoles={['admin', 'manager', 'member']}>
+                    <ProtectedRoute allowedRoles={['super_admin', 'admin', 'manager', 'member']}>
                       <LeavesPage />
                     </ProtectedRoute>
                   }
@@ -158,7 +209,9 @@ export default function App() {
                 <Route
                   path="/announcements"
                   element={
-                    <ProtectedRoute allowedRoles={['admin', 'manager', 'member']}>
+                    <ProtectedRoute
+                      allowedRoles={['super_admin', 'admin', 'manager', 'member', 'parent']}
+                    >
                       <AnnouncementsPage />
                     </ProtectedRoute>
                   }
@@ -166,7 +219,9 @@ export default function App() {
                 <Route
                   path="/settings"
                   element={
-                    <ProtectedRoute allowedRoles={['admin', 'manager', 'member']}>
+                    <ProtectedRoute
+                      allowedRoles={['super_admin', 'admin', 'manager', 'member', 'parent']}
+                    >
                       <SettingsPage />
                     </ProtectedRoute>
                   }

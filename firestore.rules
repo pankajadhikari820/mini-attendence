@@ -18,16 +18,31 @@ service cloud.firestore {
       return hasProfile() && myUser().status == 'active';
     }
 
+    function isSuperAdmin() {
+      return isActive() && myUser().role == 'super_admin';
+    }
+
     function isOrgAdmin(orgId) {
-      return isActive() && myUser().orgId == orgId && myUser().role == 'admin';
+      return isActive() && (
+        myUser().role == 'super_admin' ||
+        (myUser().orgId == orgId && myUser().role == 'admin')
+      );
     }
 
     function isOrgManager(orgId) {
       return isActive() && myUser().orgId == orgId && myUser().role == 'manager';
     }
 
+    function isParentOf(studentUid) {
+      return isActive()
+        && myUser().role == 'parent'
+        && 'linkedStudentUids' in myUser()
+        && myUser().linkedStudentUids is list
+        && studentUid in myUser().linkedStudentUids;
+    }
+
     function inSameOrg(orgId) {
-      return hasProfile() && myUser().orgId == orgId;
+      return hasProfile() && (myUser().role == 'super_admin' || myUser().orgId == orgId);
     }
 
     function userImmutableFieldsUnchanged() {
@@ -36,13 +51,28 @@ service cloud.firestore {
         && request.resource.data.status == resource.data.status
         && request.resource.data.managerId == resource.data.managerId
         && request.resource.data.memberId == resource.data.memberId
-        && request.resource.data.uid == resource.data.uid;
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.get('linkedStudentUids', null) == resource.data.get('linkedStudentUids', null);
     }
 
-    function isDirectChildOfSession(sess) {
+    // Eligibility check for submitting self-attendance to a Live Session
+    function isEligibleForSession(sess) {
       return myUser().orgId == sess.orgId && (
-        (sess.ownerRole == 'admin' && myUser().role == 'manager') ||
-        (sess.ownerRole == 'manager' && myUser().role == 'member' && myUser().managerId == sess.ownerUid)
+        // Admin -> Manager session
+        (sess.ownerRole == 'admin' && myUser().role == 'manager')
+        // Multi-teacher class/subject session -> Students assigned to that classId
+        || (
+          sess.ownerRole == 'manager'
+          && myUser().role == 'member'
+          && 'classId' in sess && sess.classId is string && sess.classId != ''
+          && 'classId' in myUser() && myUser().classId == sess.classId
+        )
+        // Legacy direct manager -> member session (when session has no classId or student has direct managerId)
+        || (
+          sess.ownerRole == 'manager'
+          && myUser().role == 'member'
+          && myUser().managerId == sess.ownerUid
+        )
       );
     }
 
@@ -53,6 +83,7 @@ service cloud.firestore {
       return dist <= sess.location.radius;
     }
 
+    // Strict 10-second server-clock validation on sessionSecrets
     function liveSecretValid(secret, data) {
       let within10s = secret.active == true
         && secret.tokenUpdatedAt is timestamp
@@ -76,7 +107,7 @@ service cloud.firestore {
     // Globally unique 6-character user ID lookup (e.g. PAN482)
     match /userIds/{userId} {
       allow get: if isSignedIn();
-      allow list: if isSignedIn() && hasProfile() && myUser().role == 'admin';
+      allow list: if isSignedIn() && hasProfile() && myUser().role in ['super_admin', 'admin'];
       allow create: if isSignedIn()
         && userId.matches('^[A-Z]{3}[0-9]{3}$')
         && !exists(/databases/$(database)/documents/userIds/$(userId));
@@ -114,7 +145,8 @@ service cloud.firestore {
         && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
         && request.resource.data.email is string && request.resource.data.email.size() > 3 && request.resource.data.email.size() <= 180
         && request.resource.data.message is string && request.resource.data.message.size() > 0 && request.resource.data.message.size() <= 2000;
-      allow read, update, delete: if false;
+      allow read: if isSuperAdmin();
+      allow update, delete: if false;
     }
 
     // Organizations
@@ -127,19 +159,23 @@ service cloud.firestore {
       allow delete: if isOrgAdmin(orgId);
     }
 
-    // Users
+    // Users (Super Admin, Org Admin, Manager/Teacher, Member/Student, Parent)
     match /users/{uid} {
       allow read: if isSignedIn() && (
         request.auth.uid == uid
+        || isSuperAdmin()
         || (hasProfile() && myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
         || (hasProfile() && myUser().role == 'manager' && myUser().orgId == resource.data.orgId && (
-              resource.data.managerId == request.auth.uid || resource.data.role == 'admin'
+              resource.data.managerId == request.auth.uid
+              || resource.data.role == 'admin'
+              || resource.data.role == 'member'
            ))
+        || (isParentOf(uid) && resource.data.orgId == myUser().orgId)
       );
 
       allow create: if isSignedIn() && (
         (request.auth.uid == uid && request.resource.data.uid == uid && request.resource.data.role == 'admin' && request.resource.data.status == 'active')
-        || (request.auth.uid == uid && request.resource.data.uid == uid && request.resource.data.status == 'pending' && request.resource.data.role in ['manager', 'member'])
+        || (request.auth.uid == uid && request.resource.data.uid == uid && request.resource.data.status == 'pending' && request.resource.data.role in ['manager', 'member', 'parent'])
         || isOrgAdmin(request.resource.data.orgId)
         || (isOrgManager(request.resource.data.orgId) && request.resource.data.role == 'member' && request.resource.data.managerId == request.auth.uid)
       );
@@ -161,12 +197,65 @@ service cloud.firestore {
       );
     }
 
-    // Live Attendance Sessions (public metadata for owner & direct children only)
+    // Academic Structure: Departments, Classes/Sections, Subjects, Faculty Assignments, Timetables
+    match /departments/{deptId} {
+      allow read: if isActive() && inSameOrg(resource.data.orgId);
+      allow create: if isOrgAdmin(request.resource.data.orgId);
+      allow update, delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    match /classes/{classId} {
+      allow read: if isActive() && inSameOrg(resource.data.orgId);
+      allow create: if isOrgAdmin(request.resource.data.orgId);
+      allow update, delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    match /subjects/{subjectId} {
+      allow read: if isActive() && inSameOrg(resource.data.orgId);
+      allow create: if isOrgAdmin(request.resource.data.orgId);
+      allow update, delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    match /facultyAssignments/{assignmentId} {
+      allow read: if isActive() && inSameOrg(resource.data.orgId);
+      allow create: if isOrgAdmin(request.resource.data.orgId);
+      allow update, delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    match /timetables/{slotId} {
+      allow read: if isActive() && inSameOrg(resource.data.orgId);
+      allow create: if isOrgAdmin(request.resource.data.orgId);
+      allow update, delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    // Parent-Student Link Requests (Admin verifies to grant read-only access)
+    match /parentLinks/{linkId} {
+      allow read: if isSignedIn() && (
+        resource.data.parentUid == request.auth.uid
+        || resource.data.studentUid == request.auth.uid
+        || isOrgAdmin(resource.data.orgId)
+      );
+      allow create: if isSignedIn() && (
+        (request.resource.data.parentUid == request.auth.uid && request.resource.data.status == 'pending')
+        || isOrgAdmin(request.resource.data.orgId)
+      );
+      allow update, delete: if isOrgAdmin(resource.data.orgId);
+    }
+
+    // Live Attendance Sessions
+    // NOTE: Contains NO secret tokens/codes. All secrets live in owner-only `sessionSecrets`.
+    // Query-safe read rules: students query by (orgId + classId + status) OR (orgId + ownerUid + status),
+    // managers query by (orgId + ownerRole == 'admin' + status) OR (orgId + ownerUid == uid).
     match /sessions/{sessionId} {
-      allow read: if isActive() && myUser().orgId == resource.data.orgId && (
-        myUser().role == 'admin'
-        || resource.data.ownerUid == request.auth.uid
-        || isDirectChildOfSession(resource.data)
+      allow read: if isActive() && (
+        isSuperAdmin()
+        || (myUser().orgId == resource.data.orgId && (
+          myUser().role == 'admin'
+          || resource.data.ownerUid == request.auth.uid
+          || (myUser().role == 'manager' && resource.data.ownerRole == 'admin')
+          || (myUser().role == 'member' && 'classId' in myUser() && myUser().classId != null && myUser().classId != '' && resource.data.classId == myUser().classId)
+          || (myUser().role == 'member' && myUser().managerId != null && resource.data.ownerUid == myUser().managerId)
+        ))
       );
 
       allow create: if isActive()
@@ -187,7 +276,7 @@ service cloud.firestore {
       );
     }
 
-    // Session Secrets: STRICTLY owner-only. Members/scanners can NEVER read or write.
+    // Session Secrets: STRICTLY owner-only. Students/scanners/parents can NEVER read or write.
     match /sessionSecrets/{sessionId} {
       allow read: if isActive() && resource.data.ownerUid == request.auth.uid;
       allow create: if isActive()
@@ -206,7 +295,7 @@ service cloud.firestore {
     // One device = one person per session (write-once per sessionId_deviceId)
     match /sessionDevices/{deviceDocId} {
       allow get: if isActive() && (resource == null || resource.data.orgId == myUser().orgId);
-      allow list: if isActive() && (myUser().role == 'admin' || myUser().role == 'manager');
+      allow list: if isActive() && myUser().role in ['super_admin', 'admin', 'manager'];
       allow create: if isActive()
         && request.resource.data.orgId == myUser().orgId
         && request.resource.data.personUid == request.auth.uid
@@ -219,7 +308,7 @@ service cloud.firestore {
     // Failed attendance attempts log (owner sees rejected attempts on session screen)
     match /attempts/{attemptId} {
       allow read: if isActive() && resource.data.orgId == myUser().orgId && (
-        myUser().role == 'admin'
+        myUser().role in ['super_admin', 'admin']
         || resource.data.ownerUid == request.auth.uid
       );
       allow create: if isActive()
@@ -229,14 +318,19 @@ service cloud.firestore {
       allow delete: if isOrgAdmin(resource.data.orgId);
     }
 
+    // Strictly validates self-marking via live rotating QR/code:
+    // - Status MUST be 'present' (no 'late' status permitted)
+    // - Deterministic ID: {orgId}_{sessionId}_{uid} so multiple subjects on the same day never overwrite each other
+    // - Prevents duplicate attendance within the same session
     function canSelfMarkAttendance(recordId) {
       let sid = request.resource.data.sessionId;
       let sess = get(/databases/$(database)/documents/sessions/$(sid)).data;
       let secret = get(/databases/$(database)/documents/sessionSecrets/$(sid)).data;
       let devDocId = sid + '_' + request.resource.data.deviceId;
       return request.resource.data.method in ['live_qr', 'live_code']
+        && request.resource.data.status == 'present'
         && request.resource.data.personUid == request.auth.uid
-        && recordId == request.resource.data.orgId + '_' + request.resource.data.date + '_' + request.auth.uid
+        && recordId == request.resource.data.orgId + '_' + sid + '_' + request.auth.uid
         && !exists(/databases/$(database)/documents/attendance/$(recordId))
         && request.resource.data.timestamp == request.time
         && sid is string
@@ -248,7 +342,7 @@ service cloud.firestore {
         && secret.ownerUid == sess.ownerUid
         && sess.status == 'open'
         && request.time <= sess.endsAt
-        && isDirectChildOfSession(sess)
+        && isEligibleForSession(sess)
         && liveSecretValid(secret, request.resource.data)
         && (
           !sess.locationCheckEnabled
@@ -262,31 +356,43 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/sessionDevices/$(devDocId)).data.personUid == request.auth.uid;
     }
 
-    // Attendance: deterministic ID {orgId}_{date}_{personUid}
+    // Attendance: strictly supports ONLY ['present', 'absent', 'leave']
+    // Parents have strict READ-ONLY access to their linked students only.
+    // Students can NEVER update or delete attendance records.
     match /attendance/{recordId} {
       allow get: if isSignedIn() && hasProfile() && (
         resource == null
+        || isSuperAdmin()
         || (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
         || (myUser().role == 'manager' && myUser().orgId == resource.data.orgId && (
-              resource.data.managerId == request.auth.uid || resource.data.personUid == request.auth.uid
+              resource.data.managerId == request.auth.uid
+              || resource.data.teacherUid == request.auth.uid
+              || resource.data.markedBy == request.auth.uid
+              || resource.data.personUid == request.auth.uid
            ))
         || (myUser().role == 'member' && resource.data.personUid == request.auth.uid)
+        || (isParentOf(resource.data.personUid) && myUser().orgId == resource.data.orgId)
       );
 
       allow list: if isSignedIn() && hasProfile() && (
-        (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
+        isSuperAdmin()
+        || (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
         || (myUser().role == 'manager' && myUser().orgId == resource.data.orgId && (
-              resource.data.managerId == request.auth.uid || resource.data.personUid == request.auth.uid
+              resource.data.managerId == request.auth.uid
+              || resource.data.teacherUid == request.auth.uid
+              || resource.data.markedBy == request.auth.uid
+              || resource.data.personUid == request.auth.uid
            ))
         || (myUser().role == 'member' && resource.data.personUid == request.auth.uid)
+        || (isParentOf(resource.data.personUid) && myUser().orgId == resource.data.orgId)
       );
 
-      // Two valid create paths:
-      // 1) Self-marking via live rotating QR ("live_qr") or live 6-digit code ("live_code")
-      // 2) Backup manual / ID-card marking by direct parent (Admin -> Manager, Manager -> own Member)
+      // Strictly ONLY ['present', 'absent', 'leave'] — 'late' is permanently rejected
+      // ID-card QR codes can NEVER authorize self-marking (only live_qr / live_code with active 10s secret)
       allow create: if isActive()
         && request.resource.data.orgId == myUser().orgId
-        && request.resource.data.status in ['present', 'absent', 'late', 'leave']
+        && request.resource.data.status in ['present', 'absent', 'leave']
+        && myUser().role != 'parent'
         && (
           (
             request.resource.data.method in ['live_qr', 'live_code']
@@ -301,13 +407,13 @@ service cloud.firestore {
             && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.orgId == myUser().orgId
             && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.status == 'active'
             && (
-              (myUser().role == 'admin' && (
-                get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'manager'
-                || request.resource.data.isDemo == true
-              ))
+              (myUser().role in ['super_admin', 'admin'])
               || (myUser().role == 'manager'
                   && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.role == 'member'
-                  && get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.managerId == request.auth.uid)
+                  && (
+                    get(/databases/$(database)/documents/users/$(request.resource.data.personUid)).data.managerId == request.auth.uid
+                    || request.resource.data.teacherUid == request.auth.uid
+                  ))
             )
           )
         );
@@ -316,34 +422,43 @@ service cloud.firestore {
         && resource.data.orgId == myUser().orgId
         && request.resource.data.orgId == resource.data.orgId
         && request.resource.data.personUid == resource.data.personUid
-        && request.resource.data.status in ['present', 'absent', 'late', 'leave']
+        && request.resource.data.status in ['present', 'absent', 'leave']
+        && myUser().role != 'member'
+        && myUser().role != 'parent'
         && (
-          myUser().role == 'admin'
-          || (myUser().role == 'manager' && resource.data.managerId == request.auth.uid)
+          myUser().role in ['super_admin', 'admin']
+          || (myUser().role == 'manager' && (
+              resource.data.managerId == request.auth.uid
+              || resource.data.teacherUid == request.auth.uid
+              || resource.data.markedBy == request.auth.uid
+          ))
         );
 
       allow delete: if isOrgAdmin(resource.data.orgId);
     }
 
-    // Leave Requests
+    // Leave Requests (Parents have read-only access to linked student's leave applications)
     match /leaves/{leaveId} {
       allow read: if isSignedIn() && hasProfile() && (
-        (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
+        isOrgAdmin(resource.data.orgId)
         || resource.data.personUid == request.auth.uid
         || resource.data.toUid == request.auth.uid
+        || (isParentOf(resource.data.personUid) && myUser().orgId == resource.data.orgId)
       );
 
       allow create: if isActive()
         && request.resource.data.orgId == myUser().orgId
+        && myUser().role != 'parent'
         && (
           (request.resource.data.personUid == request.auth.uid && request.resource.data.status == 'pending')
-          || (myUser().role == 'admin' && request.resource.data.isDemo == true)
+          || (myUser().role in ['super_admin', 'admin'] && request.resource.data.isDemo == true)
         );
 
       allow update: if isActive()
         && resource.data.orgId == myUser().orgId
+        && myUser().role != 'parent'
         && (
-          myUser().role == 'admin'
+          myUser().role in ['super_admin', 'admin']
           || resource.data.toUid == request.auth.uid
         );
 
@@ -353,24 +468,30 @@ service cloud.firestore {
     // Announcements
     match /announcements/{annId} {
       allow read: if isActive() && myUser().orgId == resource.data.orgId && (
-        myUser().role == 'admin'
+        myUser().role in ['super_admin', 'admin']
         || resource.data.audience == 'all'
         || (myUser().role == 'manager' && (resource.data.audience == 'managers' || resource.data.fromUid == request.auth.uid))
         || (myUser().role == 'member' && resource.data.audience == 'members' && (resource.data.managerId == null || resource.data.managerId == myUser().managerId))
+        || (myUser().role == 'parent' && resource.data.audience in ['all', 'parents'])
       );
 
       allow create: if isActive()
         && request.resource.data.orgId == myUser().orgId
-        && (myUser().role == 'admin' || myUser().role == 'manager');
+        && myUser().role in ['super_admin', 'admin', 'manager'];
 
       allow update, delete: if isActive()
         && resource.data.orgId == myUser().orgId
-        && (myUser().role == 'admin' || resource.data.fromUid == request.auth.uid);
+        && (myUser().role in ['super_admin', 'admin'] || resource.data.fromUid == request.auth.uid);
     }
 
-    // Notifications
+    // Notifications (supports deterministic dedupe doc IDs for low-attendance alerts)
     match /notifications/{notifId} {
-      allow read: if isSignedIn() && (
+      allow get: if isSignedIn() && (
+        resource == null
+        || resource.data.toUid == request.auth.uid
+        || isOrgAdmin(resource.data.orgId)
+      );
+      allow list: if isSignedIn() && (
         resource.data.toUid == request.auth.uid
         || isOrgAdmin(resource.data.orgId)
       );
@@ -388,6 +509,26 @@ service cloud.firestore {
         resource.data.toUid == request.auth.uid
         || isOrgAdmin(resource.data.orgId)
       );
+    }
+
+    // Immutable Audit Logs: Append-only. NOBODY (not even Admin or Super Admin) can update or delete.
+    match /auditLogs/{logId} {
+      allow read: if isActive() && (
+        isSuperAdmin()
+        || (myUser().role == 'admin' && myUser().orgId == resource.data.orgId)
+      );
+
+      allow create: if isSignedIn()
+        && hasProfile()
+        && request.resource.data.orgId == myUser().orgId
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.actorRole == myUser().role
+        && request.resource.data.timestamp == request.time
+        && request.resource.data.action is string
+        && request.resource.data.summary is string;
+
+      allow update: if false;
+      allow delete: if false;
     }
   }
 }

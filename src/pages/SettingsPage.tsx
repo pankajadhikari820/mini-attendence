@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Database, MapPin, QrCode, Trash2 } from 'lucide-react';
+import { Camera, Database, MapPin, QrCode, Trash2, Upload } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useTheme } from '../context/ThemeContext';
@@ -8,7 +8,12 @@ import type { OrgType } from '../types';
 import { updateOrganization } from '../services/orgService';
 import { updateUserDetails } from '../services/userService';
 import { deleteDemoData, loadDemoData } from '../services/demoService';
-import { getCurrentPosition, getFirebaseErrorKey } from '../utils/helpers';
+import {
+  compressImageToDataUrl,
+  getCurrentPosition,
+  getFirebaseErrorKey,
+  getInitials,
+} from '../utils/helpers';
 import { Layout } from '../components/Layout';
 import { LanguageToggle } from '../components/LanguageToggle';
 import { PWAInstallButton } from '../components/PWAInstallButton';
@@ -35,17 +40,20 @@ export const SettingsPage: React.FC = () => {
   const [myName, setMyName] = useState(profile?.name || '');
   const [myPhone, setMyPhone] = useState(profile?.phone || '');
   const [myRoll, setMyRoll] = useState(profile?.rollNumber || '');
+  const [myEnrollment, setMyEnrollment] = useState(profile?.enrollmentNumber || '');
+  const [myPhotoUrl, setMyPhotoUrl] = useState(profile?.photoUrl || '');
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // Org fields (Admin only)
+  // Org fields (Admin / Super Admin only — ZERO lateAfter field)
   const [orgName, setOrgName] = useState(org?.name || '');
   const [orgType, setOrgType] = useState<OrgType>(org?.type || 'College');
+  const [orgAddress, setOrgAddress] = useState(org?.address || '');
+  const [orgLogoUrl, setOrgLogoUrl] = useState(org?.logoUrl || '');
   const [managerLabel, setManagerLabel] = useState(org?.roleLabels?.manager || 'Manager');
   const [memberLabel, setMemberLabel] = useState(org?.roleLabels?.member || 'Member');
-  const [lateAfter, setLateAfter] = useState(org?.lateAfter || '09:30');
   const [timezone, setTimezone] = useState(org?.timezone || 'Asia/Kolkata');
   const [lowThreshold, setLowThreshold] = useState(org?.lowAttendanceThreshold ?? 75);
-  const [defaultDuration, setDefaultDuration] = useState(org?.defaultSessionDuration ?? 30);
+  const [defaultDuration, setDefaultDuration] = useState(org?.defaultSessionDuration ?? 45);
   const [locEnabled, setLocEnabled] = useState(org?.location?.enabled ?? true);
   const [locRadius, setLocRadius] = useState(org?.location?.radius ?? 50);
   const [locLat, setLocLat] = useState(org?.location?.lat ?? 0);
@@ -57,11 +65,15 @@ export const SettingsPage: React.FC = () => {
   const [demoBusy, setDemoBusy] = useState<'loading' | 'deleting' | null>(null);
   const [showQr, setShowQr] = useState(false);
 
+  const isOrgAdmin = profile?.role === 'admin' || profile?.role === 'super_admin';
+
   useEffect(() => {
     if (profile) {
       setMyName(profile.name);
       setMyPhone(profile.phone || '');
       setMyRoll(profile.rollNumber || '');
+      setMyEnrollment(profile.enrollmentNumber || '');
+      setMyPhotoUrl(profile.photoUrl || '');
     }
   }, [profile]);
 
@@ -69,18 +81,43 @@ export const SettingsPage: React.FC = () => {
     if (org) {
       setOrgName(org.name);
       setOrgType(org.type);
+      setOrgAddress(org.address || '');
+      setOrgLogoUrl(org.logoUrl || '');
       setManagerLabel(org.roleLabels?.manager || 'Manager');
       setMemberLabel(org.roleLabels?.member || 'Member');
-      setLateAfter(org.lateAfter || '09:30');
       setTimezone(org.timezone || 'Asia/Kolkata');
       setLowThreshold(org.lowAttendanceThreshold ?? 75);
-      setDefaultDuration(org.defaultSessionDuration ?? 30);
+      setDefaultDuration(org.defaultSessionDuration ?? 45);
       setLocEnabled(org.location?.enabled ?? true);
       setLocRadius(Math.min(500, Math.max(20, org.location?.radius ?? 50)));
       setLocLat(org.location?.lat ?? 0);
       setLocLng(org.location?.lng ?? 0);
     }
   }, [org]);
+
+  const handleProfilePhotoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressImageToDataUrl(file, 220);
+      setMyPhotoUrl(dataUrl);
+    } catch {
+      showToast(t('errors.generic'), 'error');
+    }
+    e.target.value = '';
+  };
+
+  const handleOrgLogoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressImageToDataUrl(file, 200);
+      setOrgLogoUrl(dataUrl);
+    } catch {
+      showToast(t('errors.generic'), 'error');
+    }
+    e.target.value = '';
+  };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,6 +128,8 @@ export const SettingsPage: React.FC = () => {
         name: myName.trim(),
         phone: myPhone.trim(),
         rollNumber: myRoll.trim(),
+        enrollmentNumber: myEnrollment.trim(),
+        photoUrl: myPhotoUrl,
       });
       showToast(t('settings.savedToast'), 'success');
     } catch (err) {
@@ -102,27 +141,33 @@ export const SettingsPage: React.FC = () => {
 
   const handleSaveOrg = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!org) return;
+    if (!org || !profile) return;
     setSavingOrg(true);
     try {
-      await updateOrganization(org.id, org.orgCode, {
-        name: orgName.trim(),
-        type: orgType,
-        roleLabels: {
-          manager: managerLabel.trim() || 'Manager',
-          member: memberLabel.trim() || 'Member',
+      await updateOrganization(
+        org.id,
+        org.orgCode,
+        {
+          name: orgName.trim(),
+          type: orgType,
+          address: orgAddress.trim(),
+          logoUrl: orgLogoUrl,
+          roleLabels: {
+            manager: managerLabel.trim() || 'Manager',
+            member: memberLabel.trim() || 'Member',
+          },
+          timezone,
+          lowAttendanceThreshold: Math.min(100, Math.max(10, Number(lowThreshold) || 75)),
+          defaultSessionDuration: Number(defaultDuration) || 45,
+          location: {
+            enabled: locEnabled,
+            radius: Math.min(500, Math.max(20, Number(locRadius) || 50)),
+            lat: locLat,
+            lng: locLng,
+          },
         },
-        lateAfter,
-        timezone,
-        lowAttendanceThreshold: Number(lowThreshold) || 75,
-        defaultSessionDuration: Number(defaultDuration) || 30,
-        location: {
-          enabled: locEnabled,
-          radius: Math.min(500, Math.max(20, Number(locRadius) || 50)),
-          lat: locLat,
-          lng: locLng,
-        },
-      });
+        profile
+      );
       showToast(t('settings.savedToast'), 'success');
     } catch (err) {
       showToast(t(getFirebaseErrorKey(err)), 'error');
@@ -176,7 +221,7 @@ export const SettingsPage: React.FC = () => {
       <div className="space-y-8 max-w-3xl">
         {/* Profile */}
         <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
             <div className="flex items-center gap-3">
               <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100">
                 {t('settings.profileSection')}
@@ -187,19 +232,58 @@ export const SettingsPage: React.FC = () => {
                 </span>
               )}
             </div>
-            {profile && (
+            {profile && profile.role !== 'parent' && (
               <button
                 type="button"
                 onClick={() => setShowQr(true)}
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-[#C25E00] hover:underline"
               >
                 <QrCode className="w-4 h-4" />
-                <span>{t('dashboard.showQr')}</span>
+                <span>{t('qr.openDigitalIdBtn')}</span>
               </button>
             )}
           </div>
 
           <form onSubmit={handleSaveProfile} className="space-y-4">
+            {/* Profile Photo Upload (Spark-plan safe compressed JPEG) */}
+            <div className="flex flex-wrap items-center gap-4 pb-2">
+              {myPhotoUrl ? (
+                <img
+                  src={myPhotoUrl}
+                  alt={myName}
+                  className="w-16 h-16 rounded-2xl object-cover border border-stone-200 dark:border-stone-700"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-2xl bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 flex items-center justify-center text-base font-semibold text-stone-600 dark:text-stone-300">
+                  {getInitials(myName || 'U')}
+                </div>
+              )}
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 rounded-xl border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 px-3 py-1.5 text-xs font-medium cursor-pointer">
+                    <Camera className="w-3.5 h-3.5 text-[#C25E00]" />
+                    <span>{t('settings.uploadPhoto')}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProfilePhotoFile}
+                      className="hidden"
+                    />
+                  </label>
+                  {myPhotoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setMyPhotoUrl('')}
+                      className="text-xs text-stone-500 hover:text-red-600 px-2 py-1"
+                    >
+                      {t('settings.removePhoto')}
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-stone-500">{t('settings.photoHint')}</p>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-1">{t('common.name')}</label>
@@ -222,7 +306,7 @@ export const SettingsPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-1">{t('common.phone')}</label>
                 <input
@@ -238,6 +322,16 @@ export const SettingsPage: React.FC = () => {
                   type="text"
                   value={myRoll}
                   onChange={(e) => setMyRoll(e.target.value)}
+                  className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">{t('qr.enrollmentNo')}</label>
+                <input
+                  type="text"
+                  value={myEnrollment}
+                  onChange={(e) => setMyEnrollment(e.target.value)}
+                  placeholder="e.g. ENR-2025-014"
                   className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
                 />
               </div>
@@ -302,7 +396,7 @@ export const SettingsPage: React.FC = () => {
         </section>
 
         {/* Admin Organization Settings */}
-        {profile?.role === 'admin' && org && (
+        {isOrgAdmin && org && (
           <>
             <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6">
               <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100 mb-5">
@@ -310,6 +404,45 @@ export const SettingsPage: React.FC = () => {
               </h2>
 
               <form onSubmit={handleSaveOrg} className="space-y-5">
+                {/* College / Organization Logo */}
+                <div className="flex flex-wrap items-center gap-4">
+                  {orgLogoUrl ? (
+                    <img
+                      src={orgLogoUrl}
+                      alt={orgName}
+                      className="w-14 h-14 rounded-xl object-contain border border-stone-200 dark:border-stone-700 bg-white p-1"
+                    />
+                  ) : (
+                    <div className="w-14 h-14 rounded-xl bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 flex items-center justify-center text-sm font-semibold text-stone-500">
+                      {getInitials(orgName || 'O')}
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-1.5 rounded-xl border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 px-3 py-1.5 text-xs font-medium cursor-pointer">
+                        <Upload className="w-3.5 h-3.5 text-[#C25E00]" />
+                        <span>{t('settings.uploadLogo')}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleOrgLogoFile}
+                          className="hidden"
+                        />
+                      </label>
+                      {orgLogoUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setOrgLogoUrl('')}
+                          className="text-xs text-stone-500 hover:text-red-600 px-2 py-1"
+                        >
+                          {t('settings.removePhoto')}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-stone-500">{t('settings.logoHint')}</p>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium mb-1">
@@ -341,6 +474,19 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    {t('settings.orgAddress')}
+                  </label>
+                  <input
+                    type="text"
+                    value={orgAddress}
+                    onChange={(e) => setOrgAddress(e.target.value)}
+                    placeholder={t('settings.orgAddressPlaceholder')}
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
+                  />
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium mb-1">
@@ -350,7 +496,7 @@ export const SettingsPage: React.FC = () => {
                       type="text"
                       value={managerLabel}
                       onChange={(e) => setManagerLabel(e.target.value)}
-                      placeholder="Teacher / Team Lead"
+                      placeholder="Teacher / Faculty"
                       className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
                     />
                   </div>
@@ -368,19 +514,7 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      {t('settings.lateAfter')}
-                    </label>
-                    <input
-                      type="time"
-                      value={lateAfter}
-                      onChange={(e) => setLateAfter(e.target.value)}
-                      className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2 text-sm"
-                    />
-                    <p className="mt-1 text-[11px] text-stone-500">{t('settings.lateAfterHint')}</p>
-                  </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium mb-1">
                       {t('settings.timezone')}
@@ -428,7 +562,7 @@ export const SettingsPage: React.FC = () => {
                         onChange={(e) => setDefaultDuration(Number(e.target.value))}
                         className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2 text-sm tabular-nums"
                       >
-                        {[15, 30, 60, 120].map((d) => (
+                        {[15, 30, 45, 60, 120].map((d) => (
                           <option key={d} value={d}>
                             {d} {t('common.minutes')}
                           </option>
@@ -557,7 +691,7 @@ export const SettingsPage: React.FC = () => {
           person={profile}
           org={org}
           roleLabel={
-            profile.role === 'admin'
+            profile.role === 'admin' || profile.role === 'super_admin'
               ? t('common.admin')
               : getRoleLabel(profile.role === 'manager' ? 'manager' : 'member')
           }

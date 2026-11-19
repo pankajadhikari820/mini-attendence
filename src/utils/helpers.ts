@@ -1,4 +1,4 @@
-import type { LanguageCode } from '../types';
+import type { AttendanceStatus, LanguageCode } from '../types';
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -26,6 +26,16 @@ export function generateSixDigitCode(): string {
   const arr = new Uint32Array(1);
   crypto.getRandomValues(arr);
   return String(arr[0] % 1000000).padStart(6, '0');
+}
+
+/**
+ * Normalizes any legacy attendance record status safely into strictly PRESENT, ABSENT, or LEAVE.
+ * Any legacy 'late' record from prior versions is treated as 'present' so LATE never appears anywhere.
+ */
+export function normalizeAttendanceStatus(raw: unknown): AttendanceStatus {
+  if (raw === 'absent') return 'absent';
+  if (raw === 'leave') return 'leave';
+  return 'present';
 }
 
 /**
@@ -99,9 +109,73 @@ export function getOrgTimeHHMM(timezone = 'Asia/Kolkata', dateObj = new Date()):
   }
 }
 
-export function isAfterLateTime(currentHHMM: string, lateAfter: string): boolean {
-  if (!lateAfter || !/^\d{2}:\d{2}$/.test(lateAfter)) return false;
-  return currentHHMM > lateAfter;
+export function getOrgWeekdayIndex(timezone = 'Asia/Kolkata', dateObj = new Date()): number {
+  const dateStr = getOrgDateString(timezone, dateObj);
+  return new Date(`${dateStr}T00:00:00Z`).getUTCDay(); // 0=Sun..6=Sat
+}
+
+export function parseHHMMToMinutes(hhmm: string): number {
+  const [h, m] = (hhmm || '00:00').split(':').map(Number);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+}
+
+export function timesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
+  const sA = parseHHMMToMinutes(startA);
+  const eA = parseHHMMToMinutes(endA);
+  const sB = parseHHMMToMinutes(startB);
+  const eB = parseHHMMToMinutes(endB);
+  return sA < eB && sB < eA;
+}
+
+export function formatTimeRange12h(startHHMM: string, endHHMM: string): string {
+  const fmt = (hhmm: string) => {
+    const [hStr, mStr] = (hhmm || '00:00').split(':');
+    const h = Number(hStr);
+    if (!Number.isFinite(h)) return hhmm;
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h % 12 === 0 ? 12 : h % 12;
+    return `${String(hour12).padStart(2, '0')}:${mStr || '00'} ${period}`;
+  };
+  return `${fmt(startHHMM)} – ${fmt(endHHMM)}`;
+}
+
+/**
+ * Compresses an uploaded image file to a lightweight JPEG data URL (max 240x240)
+ * so student photos and college logos work 100% on Firebase Spark plan without Storage billing.
+ */
+export function compressImageToDataUrl(file: File, maxSize = 240): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Invalid image file'));
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        if (width > height) {
+          if (width > maxSize) {
+            height = Math.round((height * maxSize) / width);
+            width = maxSize;
+          }
+        } else if (height > maxSize) {
+          width = Math.round((width * maxSize) / height);
+          height = maxSize;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas unavailable'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export function getDistanceMeters(

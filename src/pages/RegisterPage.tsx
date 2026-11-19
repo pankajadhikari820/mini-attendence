@@ -9,7 +9,7 @@ import {
   lookupManagerCode,
   lookupOrgCode,
 } from '../services/orgService';
-import { selfRegisterUser } from '../services/userService';
+import { registerParentAccount, selfRegisterUser } from '../services/userService';
 import { getFirebaseErrorKey, needsEnglishNameForId } from '../utils/helpers';
 import { Logo } from '../components/Logo';
 import { LanguageToggle } from '../components/LanguageToggle';
@@ -39,12 +39,14 @@ export const RegisterPage: React.FC = () => {
   const showEnglishNameField = needsEnglishNameForId(adminName);
 
   // Join Org fields
-  const [joinRole, setJoinRole] = useState<'manager' | 'member'>('member');
+  const [joinRole, setJoinRole] = useState<'manager' | 'member' | 'parent'>('member');
   const [joinCode, setJoinCode] = useState('');
   const [verifyingCode, setVerifyingCode] = useState(false);
   const [verifiedOrg, setVerifiedOrg] = useState<OrgCodeLookup | null>(null);
   const [verifiedManager, setVerifiedManager] = useState<ManagerCodeLookup | null>(null);
   const [rollNumber, setRollNumber] = useState('');
+  const [studentMemberId, setStudentMemberId] = useState('');
+  const [relationship, setRelationship] = useState('Parent');
 
   const handleVerifyCode = async () => {
     setError('');
@@ -56,7 +58,7 @@ export const RegisterPage: React.FC = () => {
     }
     setVerifyingCode(true);
     try {
-      if (joinRole === 'manager') {
+      if (joinRole === 'manager' || joinRole === 'parent') {
         const res = await lookupOrgCode(joinCode);
         if (!res) {
           setError(t('errors.invalidCode'));
@@ -136,7 +138,7 @@ export const RegisterPage: React.FC = () => {
 
     setSubmitting(true);
     try {
-      if (joinRole === 'manager' && !orgLookup) {
+      if ((joinRole === 'manager' || joinRole === 'parent') && !orgLookup) {
         orgLookup = await lookupOrgCode(joinCode);
         if (!orgLookup) {
           setError(t('errors.invalidCode'));
@@ -151,6 +153,27 @@ export const RegisterPage: React.FC = () => {
           setSubmitting(false);
           return;
         }
+      }
+
+      if (joinRole === 'parent') {
+        if (!studentMemberId.trim()) {
+          setError(t('auth.studentIdRequired'));
+          setSubmitting(false);
+          return;
+        }
+        await registerParentAccount({
+          orgId: orgLookup!.orgId,
+          name: adminName,
+          englishName: showEnglishNameField ? englishName.trim() : undefined,
+          email,
+          password,
+          phone,
+          studentMemberId,
+          relationship,
+          language,
+        });
+        navigate('/pending', { replace: true });
+        return;
       }
 
       await selfRegisterUser({
@@ -168,7 +191,11 @@ export const RegisterPage: React.FC = () => {
       });
       navigate('/pending', { replace: true });
     } catch (err) {
-      setError(t(getFirebaseErrorKey(err)));
+      if (err instanceof Error && err.message === 'STUDENT_NOT_FOUND') {
+        setError(t('auth.studentIdNotFound'));
+      } else {
+        setError(t(getFirebaseErrorKey(err)));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -371,45 +398,38 @@ export const RegisterPage: React.FC = () => {
                 <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
                   {t('auth.joinAsLabel')}
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setJoinRole('member');
-                      setVerifiedOrg(null);
-                      setVerifiedManager(null);
-                      setError('');
-                    }}
-                    className={`rounded-xl border px-3.5 py-2.5 text-left text-sm font-medium transition-colors ${
-                      joinRole === 'member'
-                        ? 'border-[#C25E00] bg-amber-50/50 dark:bg-amber-950/20 text-stone-900 dark:text-stone-100'
-                        : 'border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400'
-                    }`}
-                  >
-                    {t('auth.joinRoleMember')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setJoinRole('manager');
-                      setVerifiedOrg(null);
-                      setVerifiedManager(null);
-                      setError('');
-                    }}
-                    className={`rounded-xl border px-3.5 py-2.5 text-left text-sm font-medium transition-colors ${
-                      joinRole === 'manager'
-                        ? 'border-[#C25E00] bg-amber-50/50 dark:bg-amber-950/20 text-stone-900 dark:text-stone-100'
-                        : 'border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400'
-                    }`}
-                  >
-                    {t('auth.joinRoleManager')}
-                  </button>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {(
+                    [
+                      { id: 'member', label: t('auth.joinRoleMember') },
+                      { id: 'manager', label: t('auth.joinRoleManager') },
+                      { id: 'parent', label: t('auth.joinRoleParent') },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setJoinRole(opt.id);
+                        setVerifiedOrg(null);
+                        setVerifiedManager(null);
+                        setError('');
+                      }}
+                      className={`rounded-xl border px-3 py-2.5 text-left text-xs font-medium transition-colors ${
+                        joinRole === opt.id
+                          ? 'border-[#C25E00] bg-amber-50/50 dark:bg-amber-950/20 text-stone-900 dark:text-stone-100'
+                          : 'border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
-                  {joinRole === 'manager' ? t('auth.orgCodeLabel') : t('auth.managerCodeLabel')}
+                  {joinRole === 'member' ? t('auth.managerCodeLabel') : t('auth.orgCodeLabel')}
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -445,6 +465,40 @@ export const RegisterPage: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {joinRole === 'parent' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
+                      {t('auth.childStudentIdLabel')}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={8}
+                      value={studentMemberId}
+                      onChange={(e) => setStudentMemberId(e.target.value.toUpperCase())}
+                      placeholder="e.g. AAR482"
+                      className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm font-mono uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
+                      {t('auth.relationshipLabel')}
+                    </label>
+                    <select
+                      value={relationship}
+                      onChange={(e) => setRelationship(e.target.value)}
+                      className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2.5 text-sm"
+                    >
+                      <option value="Father">Father</option>
+                      <option value="Mother">Mother</option>
+                      <option value="Guardian">Guardian</option>
+                      <option value="Parent">Parent</option>
+                    </select>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -504,17 +558,19 @@ export const RegisterPage: React.FC = () => {
                     className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
-                    {t('common.rollNumber')} ({t('common.optional')})
-                  </label>
-                  <input
-                    type="text"
-                    value={rollNumber}
-                    onChange={(e) => setRollNumber(e.target.value)}
-                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
-                  />
-                </div>
+                {joinRole !== 'parent' && (
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
+                      {t('common.rollNumber')} ({t('common.optional')})
+                    </label>
+                    <input
+                      type="text"
+                      value={rollNumber}
+                      onChange={(e) => setRollNumber(e.target.value)}
+                      className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

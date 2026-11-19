@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   AlertTriangle,
+  BookOpen,
+  CalendarClock,
   Clock,
   Crosshair,
   Maximize2,
@@ -20,23 +22,35 @@ import type {
   AttendanceAttempt,
   AttendanceRecord,
   AttendanceSession,
+  FacultyAssignment,
+  TimetableSlot,
 } from '../types';
 import {
   closeAttendanceSession,
   extendAttendanceSession,
-  fetchOpenSessionByOwner,
+  fetchOpenSessionsByOwner,
   rotateSessionSecret,
   startAttendanceSession,
   subscribeSession,
   subscribeSessionAttendance,
   subscribeSessionAttempts,
 } from '../services/sessionService';
-import { fetchManagerMembers, fetchOrgUsers } from '../services/userService';
-import { getCurrentPosition, getFirebaseErrorKey } from '../utils/helpers';
+import {
+  subscribeFacultyAssignments,
+  subscribeTimetableForTeacher,
+  fetchTimetableForOrg,
+} from '../services/academicService';
+import { fetchManagerMembers, fetchOrgUsers, fetchUsersByClass } from '../services/userService';
+import {
+  formatTimeRange12h,
+  getCurrentPosition,
+  getFirebaseErrorKey,
+  getOrgWeekdayIndex,
+} from '../utils/helpers';
 import { Layout } from '../components/Layout';
 import { LocationPickerMap } from '../components/LocationPickerMap';
 
-const DURATIONS = [15, 30, 60, 120];
+const DURATIONS = [15, 30, 45, 60, 90];
 const ROTATION_SECONDS = 10;
 
 interface WakeLockSentinelLike {
@@ -47,10 +61,20 @@ export const StartAttendancePage: React.FC = () => {
   const { profile, org, getRoleLabel } = useAuth();
   const { t, formatNumber, formatTime } = useTranslation();
   const { showToast } = useToast();
+  const [searchParams] = useSearchParams();
+
+  const paramSlotId = searchParams.get('slotId') || '';
+  const paramAssignmentId = searchParams.get('assignmentId') || '';
+
+  // Academic assignments & timetable
+  const [assignments, setAssignments] = useState<FacultyAssignment[]>([]);
+  const [todaySlots, setTodaySlots] = useState<TimetableSlot[]>([]);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>('');
+  const [selectedSlotId, setSelectedSlotId] = useState<string>('');
 
   // Setup state
   const [title, setTitle] = useState('');
-  const [duration, setDuration] = useState<number>(org?.defaultSessionDuration ?? 30);
+  const [duration, setDuration] = useState<number>(org?.defaultSessionDuration ?? 45);
   const [radius, setRadius] = useState<number>(
     Math.max(20, Math.min(500, org?.location?.radius ?? 50))
   );
@@ -63,6 +87,7 @@ export const StartAttendancePage: React.FC = () => {
 
   // Active live session state
   const [activeSession, setActiveSession] = useState<AttendanceSession | null>(null);
+  const [otherOpenSessions, setOtherOpenSessions] = useState<AttendanceSession[]>([]);
   const [currentToken, setCurrentToken] = useState('');
   const [currentCode, setCurrentCode] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(ROTATION_SECONDS);
@@ -80,15 +105,112 @@ export const StartAttendancePage: React.FC = () => {
   const projectorRef = useRef<HTMLDivElement | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
 
-  const targetRoleLabel =
-    profile?.role === 'admin' ? getRoleLabel('manager') : getRoleLabel('member');
+  const isAdmin = profile?.role === 'admin' || profile?.role === 'super_admin';
+  const targetRoleLabel = isAdmin ? getRoleLabel('manager') : getRoleLabel('member');
+  const todayWeekday = useMemo(
+    () => getOrgWeekdayIndex(org?.timezone || 'Asia/Kolkata'),
+    [org?.timezone]
+  );
+
+  // Subscribe to faculty assignments (teachers only see their assigned classes/subjects)
+  useEffect(() => {
+    if (!org || !profile) return;
+    return subscribeFacultyAssignments(
+      org.id,
+      (list) => {
+        setAssignments(list);
+      },
+      isAdmin ? undefined : profile.uid
+    );
+  }, [org, profile, isAdmin]);
+
+  // Load today's timetable slots
+  useEffect(() => {
+    if (!org || !profile) return;
+    if (!isAdmin) {
+      return subscribeTimetableForTeacher(org.id, profile.uid, (slots) => {
+        setTodaySlots(slots.filter((s) => s.dayOfWeek === todayWeekday));
+      });
+    }
+    fetchTimetableForOrg(org.id)
+      .then((slots) => setTodaySlots(slots.filter((s) => s.dayOfWeek === todayWeekday)))
+      .catch(() => {});
+  }, [org, profile, isAdmin, todayWeekday]);
+
+  // Auto-select from URL query parameters (?slotId=... or ?assignmentId=...)
+  useEffect(() => {
+    if (paramSlotId && todaySlots.length > 0) {
+      const slot = todaySlots.find((s) => s.id === paramSlotId);
+      if (slot) {
+        setSelectedSlotId(slot.id);
+        setTitle(`${slot.subjectName} — ${slot.className}`);
+        const matchingAssignment = assignments.find(
+          (a) => a.classId === slot.classId && a.subjectId === slot.subjectId
+        );
+        if (matchingAssignment) setSelectedAssignmentId(matchingAssignment.id);
+        return;
+      }
+    }
+    if (paramAssignmentId && assignments.length > 0) {
+      const asgn = assignments.find((a) => a.id === paramAssignmentId);
+      if (asgn) {
+        setSelectedAssignmentId(asgn.id);
+        setTitle(`${asgn.subjectName} — ${asgn.className}`);
+        return;
+      }
+    }
+    if (!selectedAssignmentId && !selectedSlotId && assignments.length > 0 && !isAdmin) {
+      const first = assignments[0];
+      setSelectedAssignmentId(first.id);
+      setTitle(`${first.subjectName} — ${first.className}`);
+    }
+  }, [paramSlotId, paramAssignmentId, todaySlots, assignments, isAdmin, selectedAssignmentId, selectedSlotId]);
+
+  const selectedAssignment = useMemo(
+    () => assignments.find((a) => a.id === selectedAssignmentId) || null,
+    [assignments, selectedAssignmentId]
+  );
+
+  const selectedSlot = useMemo(
+    () => todaySlots.find((s) => s.id === selectedSlotId) || null,
+    [todaySlots, selectedSlotId]
+  );
+
+  const effectiveClassId = selectedSlot?.classId || selectedAssignment?.classId || null;
 
   // Sync org defaults when loaded
   useEffect(() => {
     if (!org) return;
-    setDuration(org.defaultSessionDuration ?? 30);
+    setDuration(org.defaultSessionDuration ?? 45);
     setRadius(Math.max(20, Math.min(500, org.location?.radius ?? 50)));
   }, [org]);
+
+  // Update expected headcount whenever selected class or active session changes
+  useEffect(() => {
+    if (!org || !profile) return;
+    const targetClassId = activeSession?.classId || effectiveClassId;
+    let active = true;
+    const loadCount = async () => {
+      try {
+        if (targetClassId) {
+          const classStudents = await fetchUsersByClass(org.id, targetClassId);
+          if (active) setTotalExpected(classStudents.filter((p) => p.status === 'active').length);
+        } else if (isAdmin) {
+          const mgrs = await fetchOrgUsers(org.id, 'manager');
+          if (active) setTotalExpected(mgrs.filter((p) => p.status === 'active').length);
+        } else {
+          const mems = await fetchManagerMembers(org.id, profile.uid);
+          if (active) setTotalExpected(mems.filter((p) => p.status === 'active').length);
+        }
+      } catch {
+        // Ignore transient count failure
+      }
+    };
+    loadCount();
+    return () => {
+      active = false;
+    };
+  }, [org, profile, isAdmin, activeSession?.classId, effectiveClassId]);
 
   // Read high-accuracy GPS
   const refreshGPS = useCallback(async () => {
@@ -106,35 +228,31 @@ export const StartAttendancePage: React.FC = () => {
     }
   }, [t]);
 
-  // On mount: check for an already open session, count expected subordinates, and read GPS
+  const attachToOpenSession = useCallback(async (existing: AttendanceSession) => {
+    const fresh = await rotateSessionSecret({ sessionId: existing.id });
+    tokenIssuedAtMsRef.current = Date.now();
+    endsAtMsRef.current = existing.endsAt?.toMillis?.() ?? 0;
+    setCurrentToken(fresh.token);
+    setCurrentCode(fresh.code);
+    setSecondsLeft(ROTATION_SECONDS);
+    setSessionRemainingSec(Math.max(0, Math.floor((endsAtMsRef.current - Date.now()) / 1000)));
+    setActiveSession(existing);
+  }, []);
+
+  // On mount: check for already open sessions by this teacher/admin
   useEffect(() => {
     if (!org || !profile) return;
     let mounted = true;
 
     const init = async () => {
       try {
-        const [existing, people] = await Promise.all([
-          fetchOpenSessionByOwner(org.id, profile.uid),
-          profile.role === 'admin'
-            ? fetchOrgUsers(org.id, 'manager')
-            : fetchManagerMembers(org.id, profile.uid),
-        ]);
+        const openList = await fetchOpenSessionsByOwner(org.id, profile.uid);
         if (!mounted) return;
-        setTotalExpected(people.filter((p) => p.status === 'active').length);
+        setOtherOpenSessions(openList);
 
-        if (existing) {
-          // Immediately rotate token so our client has a fresh 10-second live secret
-          const fresh = await rotateSessionSecret({ sessionId: existing.id });
-          if (!mounted) return;
-          tokenIssuedAtMsRef.current = Date.now();
-          endsAtMsRef.current = existing.endsAt?.toMillis?.() ?? 0;
-          setCurrentToken(fresh.token);
-          setCurrentCode(fresh.code);
-          setSecondsLeft(ROTATION_SECONDS);
-          setSessionRemainingSec(
-            Math.max(0, Math.floor((endsAtMsRef.current - Date.now()) / 1000))
-          );
-          setActiveSession(existing);
+        // If user explicitly came via ?slotId= or ?assignmentId= for a different subject, let them see existing or start new
+        if (openList.length > 0 && !paramSlotId && !paramAssignmentId) {
+          await attachToOpenSession(openList[0]);
         } else {
           refreshGPS();
         }
@@ -147,7 +265,7 @@ export const StartAttendancePage: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [org, profile, refreshGPS]);
+  }, [org, profile, paramSlotId, paramAssignmentId, attachToOpenSession, refreshGPS]);
 
   // Subscribe to session doc, attendance list, and rejected attempts while active
   useEffect(() => {
@@ -225,14 +343,13 @@ export const StartAttendancePage: React.FC = () => {
       const rem = endMs > 0 ? Math.max(0, Math.floor((endMs - now) / 1000)) : 0;
       setSessionRemainingSec(rem);
 
-      // Automatically stop session when duration reaches 0
       if (endMs > 0 && rem <= 0) {
         aborted = true;
         window.clearInterval(interval);
         setCurrentToken('');
         setCurrentCode('');
         try {
-          await closeAttendanceSession(sessionId);
+          await closeAttendanceSession(sessionId, profile);
         } catch {
           // Ignore
         }
@@ -244,7 +361,6 @@ export const StartAttendancePage: React.FC = () => {
       const left = Math.max(0, Math.ceil(ROTATION_SECONDS - elapsedSec));
       setSecondsLeft(left);
 
-      // Rotate slightly ahead of the strict 10-second backend cutoff so the live QR never goes stale
       if (elapsedSec >= 9.6 && !isRotatingRef.current) {
         isRotatingRef.current = true;
         setRotating(true);
@@ -256,7 +372,7 @@ export const StartAttendancePage: React.FC = () => {
           setCurrentCode(next.code);
           setSecondsLeft(ROTATION_SECONDS);
         } catch {
-          // Will retry on next tick if transient network hiccup
+          // Retry on next tick
         } finally {
           isRotatingRef.current = false;
           if (!aborted) setRotating(false);
@@ -270,9 +386,8 @@ export const StartAttendancePage: React.FC = () => {
       isRotatingRef.current = false;
       window.clearInterval(interval);
     };
-  }, [activeSession?.id]);
+  }, [activeSession?.id, profile]);
 
-  // Fullscreen listener
   useEffect(() => {
     const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFsChange);
@@ -291,19 +406,53 @@ export const StartAttendancePage: React.FC = () => {
     }
   };
 
+  const handleSelectSlot = (slot: TimetableSlot) => {
+    setSelectedSlotId(slot.id);
+    const matching = assignments.find(
+      (a) => a.classId === slot.classId && a.subjectId === slot.subjectId
+    );
+    setSelectedAssignmentId(matching?.id || '');
+    setTitle(`${slot.subjectName} — ${slot.className}`);
+  };
+
+  const handleSelectAssignment = (asgnId: string) => {
+    setSelectedAssignmentId(asgnId);
+    setSelectedSlotId('');
+    const asgn = assignments.find((a) => a.id === asgnId);
+    if (asgn) {
+      setTitle(`${asgn.subjectName} — ${asgn.className}`);
+    }
+  };
+
   const handleStartSession = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!org || !profile) return;
     setStarting(true);
     try {
+      const src = selectedSlot || selectedAssignment;
+      const computedTitle =
+        title.trim() ||
+        (src ? `${src.subjectName} — ${src.className}` : t('session.startTitle'));
+
       const { session, token, code } = await startAttendanceSession({
         org,
         owner: profile,
-        title,
+        title: computedTitle,
         durationMinutes: duration,
         lat,
         lng,
         radius,
+        departmentId: src?.departmentId || null,
+        departmentName: src?.departmentName || '',
+        classId: src?.classId || null,
+        className: src?.className || '',
+        subjectId: src?.subjectId || null,
+        subjectName: src?.subjectName || '',
+        subjectCode: src?.subjectCode || '',
+        semester: src?.semester || '',
+        section: src?.section || '',
+        classroom: selectedSlot?.classroom || '',
+        timetableSlotId: selectedSlot?.id || null,
       });
       tokenIssuedAtMsRef.current = Date.now();
       endsAtMsRef.current = session.endsAt?.toMillis?.() ?? Date.now() + duration * 60 * 1000;
@@ -312,8 +461,13 @@ export const StartAttendancePage: React.FC = () => {
       setSecondsLeft(ROTATION_SECONDS);
       setSessionRemainingSec(duration * 60);
       setActiveSession(session);
+      showToast(t('session.startedToast'), 'success');
     } catch (err) {
-      showToast(t(getFirebaseErrorKey(err)), 'error');
+      if (err instanceof Error && err.message === 'DUPLICATE_SESSION_EXISTS') {
+        showToast(t('session.duplicateSessionErr'), 'error');
+      } else {
+        showToast(t(getFirebaseErrorKey(err)), 'error');
+      }
     } finally {
       setStarting(false);
     }
@@ -334,15 +488,15 @@ export const StartAttendancePage: React.FC = () => {
   const handleClose = async () => {
     if (!activeSession) return;
     const sessionId = activeSession.id;
-    // Immediately clear in-memory QR and stop token generation UI
     setCurrentToken('');
     setCurrentCode('');
     setActiveSession(null);
+    setOtherOpenSessions((prev) => prev.filter((s) => s.id !== sessionId));
     try {
       if (document.fullscreenElement) {
         await document.exitFullscreen().catch(() => {});
       }
-      await closeAttendanceSession(sessionId);
+      await closeAttendanceSession(sessionId, profile);
       showToast(t('session.closedToast'), 'info');
     } catch (err) {
       showToast(t(getFirebaseErrorKey(err)), 'error');
@@ -360,7 +514,6 @@ export const StartAttendancePage: React.FC = () => {
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }, [sessionRemainingSec]);
 
-  // Countdown ring SVG math
   const ringRadius = 158;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset = ringCircumference * (1 - secondsLeft / ROTATION_SECONDS);
@@ -383,7 +536,7 @@ export const StartAttendancePage: React.FC = () => {
               : ''
           } space-y-6`}
         >
-          {/* Top Bar with LIVE Status & Session Details */}
+          {/* Top Bar with LIVE Status & Subject/Class Metadata */}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <div className="flex flex-wrap items-center gap-3">
@@ -395,15 +548,29 @@ export const StartAttendancePage: React.FC = () => {
                   {t('session.liveBadge')}
                 </span>
                 <h2 className="text-2xl font-bold tracking-tight text-stone-900 dark:text-stone-50">
-                  {activeSession.title || t('session.startTitle')}
+                  {activeSession.subjectName
+                    ? `${activeSession.subjectName}${activeSession.subjectCode ? ` (${activeSession.subjectCode})` : ''}`
+                    : activeSession.title || t('session.startTitle')}
                 </h2>
               </div>
               <p className="mt-1.5 text-xs text-stone-500 dark:text-stone-400 flex flex-wrap items-center gap-2 tabular-nums">
+                {activeSession.className && (
+                  <>
+                    <span className="font-medium text-stone-700 dark:text-stone-300">
+                      {activeSession.className}
+                    </span>
+                    <span>·</span>
+                  </>
+                )}
+                {activeSession.classroom && (
+                  <>
+                    <span>{activeSession.classroom}</span>
+                    <span>·</span>
+                  </>
+                )}
                 <span className="font-mono">
                   {t('session.sessionIdLabel')}: {activeSession.id.slice(0, 6).toUpperCase()}
                 </span>
-                <span>·</span>
-                <span>{targetRoleLabel}</span>
                 <span>·</span>
                 <span>
                   {t('session.endsIn')}: <strong>{formattedRemaining}</strong>
@@ -529,7 +696,6 @@ export const StartAttendancePage: React.FC = () => {
 
             {/* Live Counter + Marked List + Rejected Attempts */}
             <div className="lg:col-span-5 space-y-5">
-              {/* Counter Card */}
               <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <Users className="w-5 h-5 text-[#C25E00]" />
@@ -546,7 +712,6 @@ export const StartAttendancePage: React.FC = () => {
                 </p>
               </div>
 
-              {/* Marked Names Live Feed */}
               <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5">
                 <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 mb-3">
                   {t('session.markedListTitle')} ({formatNumber(markedRecords.length)})
@@ -572,13 +737,7 @@ export const StartAttendancePage: React.FC = () => {
                             {rec.timestamp ? ` · ${formatTime(rec.timestamp.toDate())}` : ''}
                           </p>
                         </div>
-                        <span
-                          className={`text-xs font-semibold shrink-0 ${
-                            rec.status === 'late'
-                              ? 'text-amber-700 dark:text-amber-400'
-                              : 'text-emerald-700 dark:text-emerald-400'
-                          }`}
-                        >
+                        <span className="text-xs font-semibold shrink-0 text-emerald-700 dark:text-emerald-400">
                           {t(`common.${rec.status}`)}
                         </span>
                       </div>
@@ -587,7 +746,6 @@ export const StartAttendancePage: React.FC = () => {
                 )}
               </section>
 
-              {/* Rejected Attempts List */}
               <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
@@ -654,11 +812,99 @@ export const StartAttendancePage: React.FC = () => {
           </Link>
         </div>
 
+        {/* Resume already-open sessions if any */}
+        {otherOpenSessions.length > 0 && (
+          <div className="rounded-2xl border border-emerald-200 dark:border-emerald-900/70 bg-emerald-50/70 dark:bg-emerald-950/30 p-4 space-y-2.5">
+            <p className="text-xs font-semibold text-emerald-900 dark:text-emerald-200">
+              {t('session.resumeActivePrompt')}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {otherOpenSessions.map((sess) => (
+                <button
+                  key={sess.id}
+                  type="button"
+                  onClick={() => attachToOpenSession(sess)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-2 text-xs font-medium"
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-300 animate-pulse" />
+                  <span>{sess.subjectName ? `${sess.subjectName} · ${sess.className}` : sess.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Quick pick from Today's Scheduled Lectures */}
+        {todaySlots.length > 0 && (
+          <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 space-y-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-stone-900 dark:text-stone-100">
+              <CalendarClock className="w-4 h-4 text-[#C25E00]" />
+              <span>{t('session.todayLecturesQuickPick')}</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {todaySlots.map((slot) => {
+                const active = selectedSlotId === slot.id;
+                return (
+                  <button
+                    key={slot.id}
+                    type="button"
+                    onClick={() => handleSelectSlot(slot)}
+                    className={`rounded-xl border p-3 text-left transition-colors ${
+                      active
+                        ? 'border-[#C25E00] bg-amber-50/60 dark:bg-amber-950/20'
+                        : 'border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/40'
+                    }`}
+                  >
+                    <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
+                      {slot.subjectName}
+                    </p>
+                    <p className="text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5">
+                      {slot.className}
+                      {slot.classroom ? ` · ${slot.classroom}` : ''}
+                    </p>
+                    <p className="text-[11px] font-mono text-[#C25E00] mt-1 tabular-nums">
+                      {formatTimeRange12h(slot.startTime, slot.endTime)}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         <form
           onSubmit={handleStartSession}
           className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-7 space-y-6"
         >
-          {/* Title */}
+          {/* Assigned Class & Subject Selector */}
+          {assignments.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5 flex items-center gap-1.5">
+                <BookOpen className="w-4 h-4 text-[#C25E00]" />
+                <span>{t('session.selectAssignedSubject')}</span>
+              </label>
+              <select
+                value={selectedAssignmentId}
+                onChange={(e) => handleSelectAssignment(e.target.value)}
+                className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
+              >
+                {isAdmin && (
+                  <option value="">{t('session.generalStaffSession')}</option>
+                )}
+                {assignments.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.subjectName} ({a.subjectCode || '—'}) — {a.className}
+                    {isAdmin ? ` · ${a.teacherName}` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                {t('session.subjectScopeHint')}
+              </p>
+            </div>
+          )}
+
+          {/* Session Title */}
           <div>
             <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
               {t('session.sessionTitleLabel')}
@@ -678,7 +924,7 @@ export const StartAttendancePage: React.FC = () => {
               <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
                 {t('session.durationLabel')}
               </label>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-5 gap-1.5">
                 {DURATIONS.map((mins) => (
                   <button
                     key={mins}
@@ -690,7 +936,7 @@ export const StartAttendancePage: React.FC = () => {
                         : 'border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800'
                     }`}
                   >
-                    {mins} {t('common.minutes')}
+                    {mins}m
                   </button>
                 ))}
               </div>
@@ -780,7 +1026,9 @@ export const StartAttendancePage: React.FC = () => {
             <span className="text-xs text-stone-500 dark:text-stone-400 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5" />
               <span>
-                {targetRoleLabel}: {formatNumber(totalExpected)}
+                {effectiveClassId
+                  ? `${selectedSlot?.className || selectedAssignment?.className}: ${formatNumber(totalExpected)}`
+                  : `${targetRoleLabel}: ${formatNumber(totalExpected)}`}
               </span>
             </span>
 

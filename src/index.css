@@ -4,7 +4,8 @@
 
 @layer base {
   :root {
-    --font-sans: 'Inter', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-display: 'Plus Jakarta Sans', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sans: 'DM Sans', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
@@ -14,14 +15,15 @@
   }
 
   html[lang="hi"] {
-    font-family: 'Noto Sans Devanagari', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Noto Sans Devanagari', 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   }
 
   .dark body {
-    letter-spacing: 0.005em;
+    letter-spacing: 0.008em;
   }
 
-  h1, h2, h3 {
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
     text-wrap: balance;
   }
 

@@ -33,8 +33,11 @@ export const LoginPage: React.FC = () => {
         !redirectFrom.startsWith('/register') &&
         !redirectFrom.startsWith('/pending')
       ) {
-        if (redirectFrom.startsWith('/mark') && profile.role === 'admin') {
-          navigate('/attendance', { replace: true });
+        if (
+          redirectFrom.startsWith('/mark') &&
+          (profile.role === 'admin' || profile.role === 'super_admin' || profile.role === 'parent')
+        ) {
+          navigate(getHomePathForRole(profile.role), { replace: true });
         } else {
           navigate(redirectFrom, { replace: true });
         }

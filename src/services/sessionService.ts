@@ -20,7 +20,9 @@ import type {
   AttendanceRecord,
   AttendanceSession,
   AttendanceStatus,
+  FacultyAssignment,
   Organization,
+  TimetableSlot,
   UserProfile,
 } from '../types';
 import {
@@ -30,14 +32,17 @@ import {
   getOrgDateString,
   getOrgTimeHHMM,
   getOrCreateDeviceId,
-  isAfterLateTime,
+  normalizeAttendanceStatus,
 } from '../utils/helpers';
-import { buildAttendanceDocId } from './attendanceService';
+import { buildSessionAttendanceDocId } from './attendanceService';
+import { recordAuditLog } from './auditService';
 
 /**
- * Starts a new Live Attendance Session and atomically initializes its
- * owner-only `sessionSecrets/{sessionId}` document with a 128-bit crypto token
- * and 6-digit live code valid for strictly 10 seconds on the Firestore server clock.
+ * Starts a new Live Attendance Session scoped to a specific subject, class, semester,
+ * section, and teacher (or Org-level Admin -> Manager session).
+ * Atomically initializes its owner-only `sessionSecrets/{sessionId}` document with a
+ * 128-bit crypto token and 6-digit live code valid for strictly 10 seconds on `request.time`.
+ * Prevents duplicate open sessions for the same teacher + class + subject or timetable slot.
  */
 export async function startAttendanceSession(params: {
   org: Organization;
@@ -47,7 +52,43 @@ export async function startAttendanceSession(params: {
   lat: number;
   lng: number;
   radius: number;
+  assignment?: FacultyAssignment | null;
+  timetableSlot?: TimetableSlot | null;
+  departmentId?: string | null;
+  departmentName?: string;
+  classId?: string | null;
+  className?: string;
+  courseName?: string;
+  semester?: string;
+  section?: string;
+  subjectId?: string | null;
+  subjectName?: string;
+  subjectCode?: string;
+  classroom?: string;
+  roomNumber?: string;
+  timetableSlotId?: string | null;
 }): Promise<{ session: AttendanceSession; token: string; code: string }> {
+  // Check for duplicate active session by this owner for the exact same subject/slot
+  const openMine = await fetchOpenSessionsByOwner(params.org.id, params.owner.uid);
+  const targetSlotId = params.timetableSlot?.id || params.timetableSlotId || '';
+  const targetSubjectId =
+    params.timetableSlot?.subjectId || params.assignment?.subjectId || params.subjectId || '';
+  const targetClassId =
+    params.timetableSlot?.classId || params.assignment?.classId || params.classId || '';
+  const duplicate = openMine.find((s) => {
+    if (targetSlotId && s.timetableSlotId === targetSlotId) return true;
+    if (targetSubjectId && targetClassId) {
+      return s.subjectId === targetSubjectId && s.classId === targetClassId;
+    }
+    return !targetSubjectId && !s.subjectId;
+  });
+
+  if (duplicate) {
+    // Re-attach cleanly instead of creating duplicate conflicting sessions
+    const fresh = await rotateSessionSecret({ sessionId: duplicate.id });
+    return { session: duplicate, token: fresh.token, code: fresh.code };
+  }
+
   const sessionRef = doc(collection(db, 'sessions'));
   const sessionId = sessionRef.id;
 
@@ -57,13 +98,51 @@ export async function startAttendanceSession(params: {
   const endsAtDate = new Date(Date.now() + params.durationMinutes * 60 * 1000);
   const endsAt = Timestamp.fromDate(endsAtDate);
   const locationCheckEnabled = params.org.location?.enabled ?? true;
+  const dateStr = getOrgDateString(params.org.timezone || 'Asia/Kolkata');
+
+  const classId = targetClassId;
+  const className =
+    params.timetableSlot?.className || params.assignment?.className || params.className || '';
+  const courseName =
+    params.timetableSlot?.courseName || params.assignment?.courseName || params.courseName || '';
+  const semester =
+    params.timetableSlot?.semester || params.assignment?.semester || params.semester || '';
+  const section =
+    params.timetableSlot?.section || params.assignment?.section || params.section || '';
+  const subjectId = targetSubjectId;
+  const subjectName =
+    params.timetableSlot?.subjectName || params.assignment?.subjectName || params.subjectName || '';
+  const subjectCode =
+    params.timetableSlot?.subjectCode || params.assignment?.subjectCode || params.subjectCode || '';
+  const departmentId =
+    params.assignment?.departmentId || params.timetableSlot?.departmentId || params.departmentId || '';
+  const departmentName =
+    params.assignment?.departmentName ||
+    params.timetableSlot?.departmentName ||
+    params.departmentName ||
+    '';
+  const roomNumber =
+    params.timetableSlot?.classroom ||
+    params.timetableSlot?.roomNumber ||
+    params.classroom ||
+    params.roomNumber ||
+    '';
+
+  const autoTitle =
+    params.title.trim() ||
+    (subjectName && className ? `${subjectName} · ${className}` : subjectName || 'Live Attendance');
 
   const sessionPayload = {
     orgId: params.org.id,
     ownerUid: params.owner.uid,
     ownerName: params.owner.name,
-    ownerRole: params.owner.role === 'admin' ? ('admin' as const) : ('manager' as const),
-    title: params.title.trim(),
+    teacherName: params.owner.name,
+    ownerRole:
+      params.owner.role === 'admin' || params.owner.role === 'super_admin'
+        ? ('admin' as const)
+        : ('manager' as const),
+    title: autoTitle,
+    date: dateStr,
     status: 'open' as const,
     durationMinutes: params.durationMinutes,
     locationCheckEnabled,
@@ -74,6 +153,17 @@ export async function startAttendanceSession(params: {
       radius: Math.max(20, Math.min(500, Math.round(params.radius))),
     },
     markedCount: 0,
+    ...(departmentId ? { departmentId, departmentName } : {}),
+    ...(classId ? { classId, className, courseName, semester, section } : {}),
+    ...(subjectId ? { subjectId, subjectName, subjectCode } : {}),
+    ...(roomNumber ? { roomNumber, classroom: roomNumber } : {}),
+    ...(targetSlotId ? { timetableSlotId: targetSlotId } : {}),
+    ...(params.timetableSlot
+      ? {
+          startTimeLabel: params.timetableSlot.startTime,
+          endTimeLabel: params.timetableSlot.endTime,
+        }
+      : {}),
     startedAt: serverTimestamp(),
     endsAt,
   };
@@ -85,13 +175,24 @@ export async function startAttendanceSession(params: {
     orgId: params.org.id,
     active: true,
     token,
-    prevToken: '',
     code,
-    prevCode: '',
     rotationSeq: 1,
     tokenUpdatedAt: serverTimestamp(),
   });
   await batch.commit();
+
+  await recordAuditLog({
+    actor: params.owner,
+    action: 'session.started',
+    targetCollection: 'sessions',
+    targetId: sessionId,
+    summary: `Started live session "${autoTitle}" (${params.durationMinutes} min)`,
+    metadata: {
+      classId: classId || null,
+      subjectId: subjectId || null,
+      durationMinutes: params.durationMinutes,
+    },
+  });
 
   return {
     session: {
@@ -117,9 +218,7 @@ export async function rotateSessionSecret(params: {
   await updateDoc(doc(db, 'sessionSecrets', params.sessionId), {
     active: true,
     token,
-    prevToken: '',
     code,
-    prevCode: '',
     rotationSeq: increment(1),
     tokenUpdatedAt: serverTimestamp(),
   });
@@ -145,7 +244,10 @@ export async function extendAttendanceSession(
  * Stops a live attendance session and immediately invalidates its active secret
  * atomically so no further QR scans can succeed.
  */
-export async function closeAttendanceSession(sessionId: string): Promise<void> {
+export async function closeAttendanceSession(
+  sessionId: string,
+  actor?: UserProfile | null
+): Promise<void> {
   const batch = writeBatch(db);
   batch.update(doc(db, 'sessions', sessionId), {
     status: 'closed',
@@ -154,18 +256,26 @@ export async function closeAttendanceSession(sessionId: string): Promise<void> {
   batch.update(doc(db, 'sessionSecrets', sessionId), {
     active: false,
     token: '',
-    prevToken: '',
     code: '',
-    prevCode: '',
     tokenUpdatedAt: serverTimestamp(),
   });
   await batch.commit();
+
+  if (actor) {
+    await recordAuditLog({
+      actor,
+      action: 'session.closed',
+      targetCollection: 'sessions',
+      targetId: sessionId,
+      summary: `Closed live attendance session ${sessionId.slice(0, 8)}`,
+    });
+  }
 }
 
-export async function fetchOpenSessionByOwner(
+export async function fetchOpenSessionsByOwner(
   orgId: string,
   ownerUid: string
-): Promise<AttendanceSession | null> {
+): Promise<AttendanceSession[]> {
   const snap = await getDocs(
     query(
       collection(db, 'sessions'),
@@ -175,18 +285,69 @@ export async function fetchOpenSessionByOwner(
     )
   );
   const nowMs = Date.now();
-  const active = snap.docs
-    .map((d) => ({ ...(d.data() as Omit<AttendanceSession, 'id'>), id: d.id }))
+  return snap.docs
+    .map((d) => {
+      const raw = d.data() as Omit<AttendanceSession, 'id'>;
+      return {
+        ...raw,
+        id: d.id,
+        teacherName: raw.teacherName || raw.ownerName,
+        classroom: raw.classroom || raw.roomNumber || '',
+      };
+    })
     .filter((s) => (s.endsAt?.toMillis?.() ?? 0) > nowMs)
     .sort((a, b) => (b.startedAt?.toMillis?.() ?? 0) - (a.startedAt?.toMillis?.() ?? 0));
-
-  return active[0] || null;
 }
 
-export function getDirectParentUid(profile: UserProfile, org: Organization): string | null {
-  if (profile.role === 'member') return profile.managerId || null;
-  if (profile.role === 'manager') return org.adminUid || null;
-  return null;
+export async function fetchOpenSessionByOwner(
+  orgId: string,
+  ownerUid: string
+): Promise<AttendanceSession | null> {
+  const list = await fetchOpenSessionsByOwner(orgId, ownerUid);
+  return list[0] || null;
+}
+
+export async function fetchRecentSessionsByOwner(
+  orgId: string,
+  ownerUid: string,
+  maxCount = 20
+): Promise<AttendanceSession[]> {
+  const snap = await getDocs(
+    query(
+      collection(db, 'sessions'),
+      where('orgId', '==', orgId),
+      where('ownerUid', '==', ownerUid)
+    )
+  );
+  return snap.docs
+    .map((d) => ({ ...(d.data() as Omit<AttendanceSession, 'id'>), id: d.id }))
+    .sort((a, b) => (b.startedAt?.toMillis?.() ?? 0) - (a.startedAt?.toMillis?.() ?? 0))
+    .slice(0, maxCount);
+}
+
+export function subscribeOwnerOpenSessions(
+  orgId: string,
+  ownerUid: string,
+  callback: (sessions: AttendanceSession[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'sessions'),
+    where('orgId', '==', orgId),
+    where('ownerUid', '==', ownerUid),
+    where('status', '==', 'open')
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const nowMs = Date.now();
+      const list = snap.docs
+        .map((d) => ({ ...(d.data() as Omit<AttendanceSession, 'id'>), id: d.id }))
+        .filter((s) => (s.endsAt?.toMillis?.() ?? 0) > nowMs)
+        .sort((a, b) => (b.startedAt?.toMillis?.() ?? 0) - (a.startedAt?.toMillis?.() ?? 0));
+      callback(list);
+    },
+    () => callback([])
+  );
 }
 
 export function isAuthorizedForSession(
@@ -196,68 +357,253 @@ export function isAuthorizedForSession(
 ): boolean {
   if (profile.status !== 'active') return false;
   if (session.orgId !== org.id || profile.orgId !== org.id) return false;
+
+  // Admin -> Manager session
   if (session.ownerRole === 'admin' && profile.role === 'manager') return true;
+
+  // Multi-teacher class/section session -> Student assigned to that class
   if (
     session.ownerRole === 'manager' &&
     profile.role === 'member' &&
+    session.classId &&
+    profile.classId &&
+    session.classId === profile.classId
+  ) {
+    return true;
+  }
+
+  // Legacy direct Manager -> Member session
+  if (
+    session.ownerRole === 'manager' &&
+    profile.role === 'member' &&
+    profile.managerId &&
     profile.managerId === session.ownerUid
   ) {
     return true;
   }
+
   return false;
 }
 
-/**
- * Finds the active open session of the logged-in user's direct parent
- * (Member -> their Manager, Manager -> Org Admin).
- */
-export async function findActiveParentSession(
-  profile: UserProfile,
-  org: Organization
-): Promise<AttendanceSession | null> {
-  const parentUid = getDirectParentUid(profile, org);
-  if (!parentUid) return null;
-  return fetchOpenSessionByOwner(org.id, parentUid);
+export interface SessionStreamError {
+  code: 'permission-denied' | 'network' | 'index-required' | 'unknown';
+  message: string;
+}
+
+function classifyFirestoreError(err: unknown): SessionStreamError {
+  const code = (err as { code?: string })?.code || '';
+  const rawMsg = (err as { message?: string })?.message || '';
+  if (!navigator.onLine || code === 'unavailable' || code === 'deadline-exceeded') {
+    return {
+      code: 'network',
+      message: 'Unable to reach Firestore. Check your internet connection and click Check again.',
+    };
+  }
+  if (code === 'permission-denied') {
+    return {
+      code: 'permission-denied',
+      message:
+        'Firestore security rules denied reading live sessions. Deploy the updated firestore.rules and verify your class assignment.',
+    };
+  }
+  if (code === 'failed-precondition') {
+    return {
+      code: 'index-required',
+      message:
+        'A Firestore composite index is still building or missing. Deploy firestore.indexes.json and try again.',
+    };
+  }
+  return {
+    code: 'unknown',
+    message: rawMsg || 'Could not load active live sessions. Please try again.',
+  };
 }
 
 /**
- * Real-time subscription to the direct parent's active live session.
- * Automatically updates when a Live Session starts or stops.
+ * Queries all currently active (OPEN & unexpired) sessions eligible for the logged-in user.
+ * - For Students: merges active sessions matching `classId` (multi-teacher!) AND legacy `managerId`.
+ * - For Teachers/Managers: queries open sessions started by Org Admin (`ownerRole == 'admin'`).
+ * Every query matches the exact static predicates in `firestore.rules` so Firestore never
+ * rejects the query with a false permission-denied error.
  */
-export function subscribeActiveParentSession(
+export async function findEligibleLiveSessions(
+  profile: UserProfile,
+  org: Organization
+): Promise<{ sessions: AttendanceSession[]; error: SessionStreamError | null }> {
+  if (!navigator.onLine) {
+    return {
+      sessions: [],
+      error: {
+        code: 'network',
+        message: 'You appear to be offline. Reconnect to the internet and tap Check again.',
+      },
+    };
+  }
+
+  const queries = buildEligibleSessionQueries(profile, org);
+  if (queries.length === 0) {
+    return { sessions: [], error: null };
+  }
+
+  const nowMs = Date.now();
+  const map = new Map<string, AttendanceSession>();
+  let lastErr: SessionStreamError | null = null;
+  let anySuccess = false;
+
+  await Promise.all(
+    queries.map(async (q) => {
+      try {
+        const snap = await getDocs(q);
+        anySuccess = true;
+        for (const d of snap.docs) {
+          const raw = d.data() as Omit<AttendanceSession, 'id'>;
+          const s: AttendanceSession = {
+            ...raw,
+            id: d.id,
+            teacherName: raw.teacherName || raw.ownerName,
+            classroom: raw.classroom || raw.roomNumber || '',
+          };
+          if (
+            s.status === 'open' &&
+            (s.endsAt?.toMillis?.() ?? 0) > nowMs &&
+            isAuthorizedForSession(profile, org, s)
+          ) {
+            map.set(s.id, s);
+          }
+        }
+      } catch (err) {
+        lastErr = classifyFirestoreError(err);
+      }
+    })
+  );
+
+  const sorted = Array.from(map.values()).sort(
+    (a, b) => (b.startedAt?.toMillis?.() ?? 0) - (a.startedAt?.toMillis?.() ?? 0)
+  );
+  return { sessions: sorted, error: anySuccess ? null : lastErr };
+}
+
+function buildEligibleSessionQueries(profile: UserProfile, org: Organization) {
+  const list = [];
+  if (profile.role === 'manager') {
+    list.push(
+      query(
+        collection(db, 'sessions'),
+        where('orgId', '==', org.id),
+        where('ownerRole', '==', 'admin'),
+        where('status', '==', 'open')
+      )
+    );
+  } else if (profile.role === 'member') {
+    if (profile.classId) {
+      list.push(
+        query(
+          collection(db, 'sessions'),
+          where('orgId', '==', org.id),
+          where('classId', '==', profile.classId),
+          where('status', '==', 'open')
+        )
+      );
+    }
+    if (profile.managerId) {
+      list.push(
+        query(
+          collection(db, 'sessions'),
+          where('orgId', '==', org.id),
+          where('ownerUid', '==', profile.managerId),
+          where('status', '==', 'open')
+        )
+      );
+    }
+  }
+  return list;
+}
+
+/**
+ * Real-time `onSnapshot()` subscription to ALL active sessions eligible for this Student or Manager.
+ * Supports multiple teachers running independent subject-wise sessions simultaneously or back-to-back.
+ * Properly surfaces permission-denied, network, and index errors instead of masking them as empty.
+ * Unsubscribes cleanly on unmount.
+ */
+export function subscribeEligibleLiveSessions(
   profile: UserProfile,
   org: Organization,
-  callback: (session: AttendanceSession | null) => void,
-  onError?: () => void
+  onUpdate: (sessions: AttendanceSession[]) => void,
+  onError?: (err: SessionStreamError) => void
 ): () => void {
-  const parentUid = getDirectParentUid(profile, org);
-  if (!parentUid) {
-    callback(null);
+  const queries = buildEligibleSessionQueries(profile, org);
+  if (queries.length === 0) {
+    onUpdate([]);
     return () => {};
   }
 
-  const q = query(
-    collection(db, 'sessions'),
-    where('orgId', '==', org.id),
-    where('ownerUid', '==', parentUid),
-    where('status', '==', 'open')
+  const buckets: Array<Map<string, AttendanceSession>> = queries.map(() => new Map());
+  const ready = queries.map(() => false);
+  let active = true;
+
+  const emitMerged = () => {
+    if (!active) return;
+    const nowMs = Date.now();
+    const merged = new Map<string, AttendanceSession>();
+    for (const bucket of buckets) {
+      for (const [id, sess] of bucket.entries()) {
+        if (
+          sess.status === 'open' &&
+          (sess.endsAt?.toMillis?.() ?? 0) > nowMs &&
+          isAuthorizedForSession(profile, org, sess)
+        ) {
+          merged.set(id, sess);
+        }
+      }
+    }
+    const sorted = Array.from(merged.values()).sort(
+      (a, b) => (b.startedAt?.toMillis?.() ?? 0) - (a.startedAt?.toMillis?.() ?? 0)
+    );
+    onUpdate(sorted);
+  };
+
+  const unsubs = queries.map((q, idx) =>
+    onSnapshot(
+      q,
+      (snap) => {
+        const nextMap = new Map<string, AttendanceSession>();
+        for (const d of snap.docs) {
+          const raw = d.data() as Omit<AttendanceSession, 'id'>;
+          nextMap.set(d.id, {
+            ...raw,
+            id: d.id,
+            teacherName: raw.teacherName || raw.ownerName,
+            classroom: raw.classroom || raw.roomNumber || '',
+          });
+        }
+        buckets[idx] = nextMap;
+        ready[idx] = true;
+        emitMerged();
+      },
+      (err) => {
+        if (!active) return;
+        const kind = classifyFirestoreError(err);
+        buckets[idx] = new Map();
+        ready[idx] = true;
+        // Only surface error if NO sibling query succeeded with data
+        const anyHasData = buckets.some((b) => b.size > 0);
+        if (!anyHasData) {
+          onError?.(kind);
+        }
+      }
+    )
   );
 
-  return onSnapshot(
-    q,
-    (snap) => {
-      const nowMs = Date.now();
-      const active = snap.docs
-        .map((d) => ({ ...(d.data() as Omit<AttendanceSession, 'id'>), id: d.id }))
-        .filter((s) => (s.endsAt?.toMillis?.() ?? 0) > nowMs)
-        .sort((a, b) => (b.startedAt?.toMillis?.() ?? 0) - (a.startedAt?.toMillis?.() ?? 0));
-      callback(active[0] || null);
-    },
-    () => {
-      callback(null);
-      onError?.();
+  return () => {
+    active = false;
+    for (const unsub of unsubs) {
+      try {
+        unsub();
+      } catch {
+        // Ignore cleanup error
+      }
     }
-  );
+  };
 }
 
 export type ResolvedSessionResult =
@@ -326,7 +672,10 @@ export function subscribeSessionAttendance(
     q,
     (snap) => {
       const list = snap.docs
-        .map((d) => ({ ...(d.data() as AttendanceRecord), id: d.id }))
+        .map((d) => {
+          const data = d.data() as AttendanceRecord;
+          return { ...data, id: d.id, status: normalizeAttendanceStatus(data.status) };
+        })
         .sort((a, b) => (b.timestamp?.toMillis?.() ?? 0) - (a.timestamp?.toMillis?.() ?? 0));
       callback(list);
     },
@@ -399,14 +748,17 @@ export interface SelfMarkResult {
   status?: AttendanceStatus;
   timeStr?: string;
   distanceMeters?: number;
+  subjectName?: string;
 }
 
 /**
  * Atomic self-marking flow using a Firestore Transaction + strict backend Security Rules:
- * - Atomically checks session status, duplicate attendance, and device lock inside `runTransaction`.
- * - Writes `attendance/{orgId}_{date}_{personUid}` and `sessionDevices/{sessionId}_{deviceId}`
- *   together to prevent race conditions and duplicate entries.
- * - Backend `firestore.rules` authoritatively validates role hierarchy, orgId, open session,
+ * - Always records status: 'present' (LATE status completely removed).
+ * - Uses session-scoped deterministic doc ID `${orgId}_${sessionId}_${personUid}` so
+ *   multiple subjects/teachers on the same day NEVER overwrite each other while strictly
+ *   preventing duplicate attendance within the same session.
+ * - Atomically writes `sessionDevices/{sessionId}_{deviceId}` and `attendance/{recordId}`.
+ * - Backend `firestore.rules` authoritatively validates role/class eligibility, open session,
  *   exact current token/code within strictly 10 seconds on `request.time`, GPS radius, and device lock.
  */
 export async function submitSelfAttendance(params: {
@@ -455,15 +807,14 @@ export async function submitSelfAttendance(params: {
     return { ok: false, errorCode: 'errOutsideArea', distanceMeters };
   }
 
-  const date = getOrgDateString(org.timezone || 'Asia/Kolkata');
+  const date = session.date || getOrgDateString(org.timezone || 'Asia/Kolkata');
   const currentHHMM = getOrgTimeHHMM(org.timezone || 'Asia/Kolkata');
-  const attendanceDocId = buildAttendanceDocId(org.id, date, profile.uid);
+  const attendanceDocId = buildSessionAttendanceDocId(org.id, session.id, profile.uid);
   const deviceId = getOrCreateDeviceId();
   const deviceDocId = `${session.id}_${deviceId}`;
 
-  const status: AttendanceStatus = isAfterLateTime(currentHHMM, org.lateAfter)
-    ? 'late'
-    : 'present';
+  // Strictly PRESENT (no LATE status anywhere)
+  const status: AttendanceStatus = 'present';
 
   const sessionRef = doc(db, 'sessions', session.id);
   const attendanceRef = doc(db, 'attendance', attendanceDocId);
@@ -506,8 +857,26 @@ export async function submitSelfAttendance(params: {
         personUid: profile.uid,
         personName: profile.name,
         personMemberId: profile.memberId,
-        role: profile.role === 'admin' ? 'manager' : profile.role,
+        role: profile.role === 'manager' ? 'manager' : 'member',
         managerId: profile.managerId || null,
+        teacherUid: session.ownerUid,
+        teacherName: session.ownerName,
+        ...(session.departmentId ? { departmentId: session.departmentId } : {}),
+        ...(session.classId
+          ? {
+              classId: session.classId,
+              className: session.className || '',
+              semester: session.semester || '',
+              section: session.section || '',
+            }
+          : {}),
+        ...(session.subjectId
+          ? {
+              subjectId: session.subjectId,
+              subjectName: session.subjectName || '',
+              subjectCode: session.subjectCode || '',
+            }
+          : {}),
         date,
         timestamp: serverTimestamp(),
         status,
@@ -525,11 +894,26 @@ export async function submitSelfAttendance(params: {
       });
     });
 
+    await recordAuditLog({
+      actor: profile,
+      action: 'attendance.created',
+      targetCollection: 'attendance',
+      targetId: attendanceDocId,
+      summary: `Marked PRESENT via ${method} for ${session.subjectName || session.title}`,
+      metadata: {
+        sessionId: session.id,
+        subjectId: session.subjectId || null,
+        classId: session.classId || null,
+        distanceMeters,
+      },
+    });
+
     return {
       ok: true,
       status,
       timeStr: currentHHMM,
       distanceMeters,
+      subjectName: session.subjectName || session.title,
     };
   } catch (err) {
     const message = (err as Error)?.message || '';
@@ -557,7 +941,6 @@ export async function submitSelfAttendance(params: {
       return { ok: false, errorCode: 'errNetwork' };
     }
 
-    // If Firestore backend rules rejected the commit, diagnose the exact cause
     if (codeErr === 'permission-denied') {
       try {
         const [attSnap, devSnap, sessSnap] = await Promise.all([

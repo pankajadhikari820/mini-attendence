@@ -21,6 +21,14 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "classId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
         { "fieldPath": "isDemo", "order": "ASCENDING" }
       ]
     },
@@ -38,6 +46,24 @@
       "fields": [
         { "fieldPath": "orgId", "order": "ASCENDING" },
         { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "classId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "ownerRole", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
     },
@@ -71,6 +97,15 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "teacherUid", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "attendance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
         { "fieldPath": "managerId", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "ASCENDING" }
       ]
@@ -90,6 +125,46 @@
       "fields": [
         { "fieldPath": "orgId", "order": "ASCENDING" },
         { "fieldPath": "isDemo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "facultyAssignments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "teacherUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "timetables",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "classId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "timetables",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "teacherUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "parentLinks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "auditLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
       ]
     },
     {

@@ -1,73 +1,89 @@
-# Smart Attendance System
+# Smart Campus Attendance Management System
 
-A multi-organization, QR-based attendance platform built with React, TypeScript, Tailwind CSS, Leaflet (OpenStreetMap), and Firebase (Authentication + Cloud Firestore — Spark/free plan compatible, zero Cloud Functions required). Supports a clean three-tier hierarchy (**Organization Admin → Managers → Members**), instant **English / हिंदी** language switching, dark mode, CSV bulk import, CSV/PDF reports, monthly register sheets, leave management, announcements, live rotating QR sessions with GPS verification, and installable PWA support.
-
----
-
-## Features
-
-- **Multi-Organization Hierarchy**: Strict data isolation across organizations. Customize role names per organization (e.g. *Teacher / Student*, *Faculty / Student*, *Team Lead / Employee*).
-- **Globally Unique 6-Character ID**: Every Admin, Manager, and Member receives a unique 6-character ID (`3 uppercase English letters + 3 digits`, e.g. `PAN482`, `RAH071`) reserved atomically via a Firestore transaction in `userIds/{ID}`. If a name is typed in Hindi, the form asks for the English spelling used for the ID.
-- **Live Rotating QR Sessions (Primary Attendance Mode)**:
-  - Admins start sessions for Managers; Managers start sessions for their own Members.
-  - Setup includes optional title, duration (`15 / 30 / 60 / 120` min), allowed radius (`20 – 500` m, default `50` m), and high-accuracy GPS plotted on an interactive **Leaflet + OpenStreetMap** map (no API key needed) with a draggable pin and radius circle.
-  - **Projector Mode**: Full-screen view with Screen Wake Lock API, visible **LIVE** status indicator, large QR rotating every **10 seconds** (`{ "s": sessionId, "t": token }` with 128-bit crypto tokens) with a circular countdown ring and 10s timer, synchronized **6-digit live code**, live `"Marked: X / Y"` counter, real-time marked feed, real-time `"Rejected attempts"` list, `"Extend 10 min"`, and `"Stop session"` (immediately invalidates the active token).
-- **Self-Marking & QR Scanner (`/mark`)**:
-  - Real-time subscription to the direct parent's active LIVE session (Manager scans Admin's session; Member scans their Manager's session).
-  - Automatic GPS verification (`"You are 12 m from the class ✓"` / `"You are 340 m away ✗"`), rejecting readings with accuracy > 100 m.
-  - Dedicated camera **QR Scanner** with scanning frame overlay (mobile back/front camera + desktop webcam fallback) and **Enter ID** (6-char own ID + 6-digit live code) tab.
-  - Uses a **Firestore Transaction (`runTransaction`)** to atomically check session status, prevent duplicate attendance per user, and record attendance with zero race conditions.
-- **Server-Side Security (`firestore.rules` — No Cloud Functions Required)**:
-  - Rotating secrets stored in `sessionSecrets/{sessionId}` (strictly readable/writable only by the session starter, verified server-side by Firestore Security Rules).
-  - **Strict 10-second backend TTL**: Only the currently active token/code is accepted (`request.time <= secret.tokenUpdatedAt + duration.value(10, 's')` and `secret.active == true`). Previous tokens and ended sessions are immediately rejected by Firestore on the server.
-  - Server-side role & organization checks (`orgId`, direct parent-child hierarchy), flat-earth radius check (`cosLat`, `math.sqrt`, `math.pow`), atomic one-device-per-session lock (`sessionDevices/{sessionId}_{deviceId}`), and `attempts/{id}` logging.
-- **Manual / ID-Card Backup (`/attendance/manual`)**:
-  - Personal ID card QR encodes `{ orgId, uid, id }`.
-  - Records marked manually or via backup ID-card scan are tagged `"manual"` and highlighted in yellow in Reports (both on-screen and in PDF exports).
-- **Account Creation Without Signing Out**: Uses a secondary Firebase App instance (`initializeApp(config, "secondary")`) when Admins/Managers add people directly, automatically sending a password-setup reset email.
-- **Dashboards, Reports, Leaves & Notices**: Role-specific dashboards, 7/30-day charts, low-attendance alerts, monthly member calendar, monthly register sheet view, CSV & PDF exports, leave approvals, and announcements.
-- **Bilingual (English / हिंदी) & PWA**: Instant switch in header and landing page, persisted in `localStorage` and Firestore user profiles.
+A production-ready, multi-organization **Smart Campus Attendance Management System** built with React 19, TypeScript, Tailwind CSS v4, Recharts, Leaflet (OpenStreetMap), SheetJS (`xlsx`), jsPDF, and Firebase (Authentication + Cloud Firestore — **100% Spark/free plan compatible**, zero Cloud Functions or paid Storage required).
 
 ---
 
-## Firebase Setup Steps (`attendence-92251`)
+## Key Architecture & Features
 
-The Firebase web configuration is already configured in `src/firebase.ts`. Complete the following steps in the [Firebase Console](https://console.firebase.google.com/) for project **`attendence-92251`**:
+- **Strictly 3 Attendance Statuses**: `PRESENT`, `ABSENT`, `LEAVE` across the entire frontend, backend services, reports, analytics, exports, and Firestore Security Rules. Legacy `'late'` records are safely normalized to `'present'` via `normalizeAttendanceStatus()`.
+- **Zero Biometric / Face Recognition**: Pure QR + GPS + Firebase Auth + Firestore Security Rules verification.
+- **5-Role RBAC Hierarchy**:
+  - `super_admin` — Multi-organization overview (`/super-admin`)
+  - `admin` — Organization / College Administrator (`/admin`, `/academics`, `/timetable`, `/audit-logs`, `/reports`)
+  - `manager` — Teacher / Faculty (`/manager`, `/attendance`, `/attendance/manual`, `/timetable`, `/reports`)
+  - `member` — Student (`/member`, `/mark`, `/timetable`, `/leaves`)
+  - `parent` — Read-Only Linked Student Portal (`/parent`, `/timetable`)
+- **Multiple Teachers & Subject-Wise Live Attendance**:
+  - Multiple teachers can independently run concurrent live rotating QR sessions for their assigned classes & subjects on the same day.
+  - Each live session uses an independent `sessionId` and deterministic attendance document ID `${orgId}_${sessionId}_${personUid}` (manual subject-wise backup uses `${orgId}_${date}_${subjectId}_${personUid}`), preventing subject collisions on the same date.
+  - Real-time `onSnapshot()` subscription on Student Dashboard (`/member`) and Mark Attendance (`/mark`) surfaces active live sessions instantly, with separate error states (`loading`, `empty`, `permission-denied`, `index-required`, `network`, `expired`) and a working **Check again** retry action.
+- **Anti-Proxy Security (`firestore.rules` — Spark Plan Compatible)**:
+  - Rotating 10-second cryptographic tokens stored in owner-only `sessionSecrets/{sessionId}`.
+  - Server-side TTL verification (`request.time <= secret.tokenUpdatedAt + duration.value(10, 's')`).
+  - GPS geofence verification (flat-earth distance formula enforced in Firestore rules).
+  - Atomic one-device-per-session lock (`sessionDevices/{sessionId}_{deviceId}`) via `runTransaction`.
+- **Academic Structure (`/academics`)**: Departments, Classes/Sections, Subjects, Faculty-Class-Subject Assignments, and Parent Verification & Direct Linking.
+- **Smart Timetable (`/timetable`)**: Weekly Mon–Sat schedule grid with automatic **Teacher**, **Class/Section**, and **Classroom** overlap conflict detection, plus 1-click **Start Attendance** pre-filling the live session.
+- **Digital Student ID Card**: Official ID card with student photo (compressed JPEG stored Spark-safely in Firestore), enrollment number, 6-character unique ID, academic class metadata, static verification QR, PNG download, Print, and jsPDF card export.
+- **Low Attendance Alert System**: Configurable threshold (default 75%), real-time shortage detection (overall + subject-wise), and one-click deduplicated alerts (`lowatt_${orgId}_${YYYY-MM}_${studentUid}_${targetUid}`) to students, faculty, and verified parents.
+- **Immutable Audit Logs (`/audit-logs`)**: Append-only audit trail (`allow update, delete: if false;` in `firestore.rules`) with filter, search, and Excel export.
+- **Advanced Analytics & Exports (`/reports`)**: Overall KPIs, Daily Trend chart, Subject-wise chart, Class breakdown, Shortage list, Monthly Register, multi-sheet **Excel (`.xlsx`)**, **CSV**, and **branded PDF** reports.
+- **Bilingual (English / हिंदी) & PWA**: Full English and Hindi localization, light/dark mode, and installable PWA support.
 
-### 1. Enable Email/Password Authentication
-1. Open **Build → Authentication → Sign-in method**.
-2. Enable **Email/Password** and click **Save**.
-3. Under **Authentication → Settings → Authorized domains**, add your deployed domain(s) (e.g. your Cloud Run / Firebase Hosting domain and `localhost` for local development).
+---
 
-### 2. Create Cloud Firestore Database (`asia-south1`)
-1. Open **Build → Firestore Database → Create database**.
-2. Choose location **`asia-south1` (Mumbai)** (or your preferred region).
-3. Start in **Production mode**.
+## Firebase Setup & Deployment (`attendence-92251`)
 
-### 3. Publish Firestore Security Rules
-1. Open **Firestore Database → Rules** (or deploy via Firebase CLI: `firebase deploy --only firestore:rules`).
-2. Copy the entire contents of `firestore.rules` from this repository and click **Publish**.
+The Firebase configuration is already set in `src/firebase.ts`. Complete these steps in the [Firebase Console](https://console.firebase.google.com/) or via Firebase CLI:
 
-### 4. Create Composite Indexes
-Deploy `firestore.indexes.json` (`firebase deploy --only firestore:indexes`) or create the following composite indexes in **Firestore → Indexes**:
+### 1. Authentication
+- Enable **Email/Password** under **Build → Authentication → Sign-in method**.
+- Add your deployed domain(s) under **Authentication → Settings → Authorized domains**.
+
+### 2. Deploy Firestore Security Rules & Composite Indexes
+```bash
+firebase deploy --only firestore:rules,firestore:indexes
+```
+
+Or copy `firestore.rules` into **Firestore Database → Rules** and create the composite indexes defined in `firestore.indexes.json`:
 
 | Collection | Fields |
 |---|---|
 | `users` | `orgId` (Asc), `role` (Asc) |
 | `users` | `orgId` (Asc), `managerId` (Asc) |
+| `users` | `orgId` (Asc), `classId` (Asc) |
 | `users` | `orgId` (Asc), `isDemo` (Asc) |
 | `userIds` | `orgId` (Asc), `isDemo` (Asc) |
+| `sessions` | `orgId` (Asc), `status` (Asc) |
 | `sessions` | `orgId` (Asc), `ownerUid` (Asc), `status` (Asc) |
+| `sessions` | `orgId` (Asc), `classId` (Asc), `status` (Asc) |
+| `sessions` | `orgId` (Asc), `ownerRole` (Asc), `status` (Asc) |
 | `attempts` | `orgId` (Asc), `sessionId` (Asc), `time` (Desc) |
 | `attendance` | `orgId` (Asc), `date` (Asc) |
 | `attendance` | `orgId` (Asc), `sessionId` (Asc) |
 | `attendance` | `orgId` (Asc), `managerId` (Asc), `date` (Asc) |
+| `attendance` | `orgId` (Asc), `classId` (Asc), `date` (Asc) |
 | `attendance` | `orgId` (Asc), `personUid` (Asc), `date` (Desc) |
 | `attendance` | `orgId` (Asc), `isDemo` (Asc) |
+| `facultyAssignments` | `orgId` (Asc), `teacherUid` (Asc) |
+| `facultyAssignments` | `orgId` (Asc), `classId` (Asc) |
+| `timetableSlots` | `orgId` (Asc), `classId` (Asc) |
+| `timetableSlots` | `orgId` (Asc), `teacherUid` (Asc) |
+| `parentLinks` | `orgId` (Asc), `parentUid` (Asc) |
+| `parentLinks` | `orgId` (Asc), `studentUid` (Asc) |
+| `auditLogs` | `orgId` (Asc), `timestamp` (Desc) |
 | `leaves` | `orgId` (Asc), `toUid` (Asc), `createdAt` (Desc) |
 | `leaves` | `orgId` (Asc), `personUid` (Asc), `createdAt` (Desc) |
 | `announcements` | `orgId` (Asc), `createdAt` (Desc) |
 | `notifications` | `toUid` (Asc), `createdAt` (Desc) |
+
+---
+
+## Spark Plan vs. Blaze Plan Notes
+
+- **Fully Supported on Spark (Free) Plan**: All authentication, real-time live QR sessions, 10s token validation, GPS radius checks, one-device locks, student photo / college logo uploads (compressed JPEG data URLs), parent portal, timetable conflict checks, audit logs, Excel/PDF exports, and in-app deduplicated low-attendance notifications.
+- **Requires Blaze Plan (Optional Future Enhancement)**: Scheduled background cron email/SMS/push notifications sent automatically while no admin/teacher has the app open would require Firebase Cloud Functions + an external email/SMS provider.
 
 ---
 
@@ -76,32 +92,7 @@ Deploy `firestore.indexes.json` (`firebase deploy --only firestore:indexes`) or 
 ```bash
 npm install
 npm run dev
-```
-
-Build for production:
-
-```bash
 npm run build
 ```
 
-> **Camera & GPS Note**: Browser camera access for QR scanning and high-accuracy GPS require **HTTPS** (or `localhost`).
-
----
-
-## Project Structure
-
-```text
-├── firestore.rules           # Multi-tenant + live rotating QR & GPS security rules (no Cloud Functions)
-├── firestore.indexes.json    # Composite Firestore index definitions
-├── public/                   # PWA icons (SVG + 180/192/512/maskable PNGs)
-└── src/
-    ├── firebase.ts           # Firebase SDK + secondary app helper
-    ├── types/                # TypeScript models (Org, User, Session, Secret, Attempt, Attendance)
-    ├── i18n/                 # en.json & hi.json dictionaries
-    ├── context/              # Auth, Language, Theme, Toast contexts
-    ├── hooks/                # useTranslation, usePWAInstall, useOnlineStatus
-    ├── services/             # org, user, session, attendance, leave, communication, demo services
-    ├── utils/                # 6-char ID generator, crypto token/code, GPS/flat-earth distance, audio/vibration
-    ├── components/           # Layout, LocationPickerMap, QRCardModal, PeopleManagerView, ProtectedRoute
-    └── pages/                # Landing, Auth, Dashboards, StartAttendance, MarkYourAttendance, Backup, Reports, Settings
-```
+> **Note**: Camera QR scanning and high-accuracy GPS require **HTTPS** (or `localhost`).

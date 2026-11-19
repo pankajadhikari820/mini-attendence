@@ -13,6 +13,7 @@ import { db } from '../firebase';
 import type { LeaveRequest, Organization, UserProfile } from '../types';
 import { eachDateBetween } from '../utils/helpers';
 import { buildAttendanceDocId } from './attendanceService';
+import { recordAuditLog } from './auditService';
 import { createNotification } from './communicationService';
 
 export async function createLeaveRequest(params: {
@@ -31,7 +32,7 @@ export async function createLeaveRequest(params: {
     orgId: params.org.id,
     personUid: params.requester.uid,
     personName: params.requester.name,
-    personRole: params.requester.role === 'admin' ? 'manager' : params.requester.role,
+    personRole: params.requester.role === 'member' ? 'member' : 'manager',
     personMemberId: params.requester.memberId,
     toUid,
     fromDate: params.fromDate,
@@ -47,6 +48,17 @@ export async function createLeaveRequest(params: {
     toUid,
     type: 'leave',
     text: `${params.requester.name} requested leave (${params.fromDate} to ${params.toDate}).`,
+  });
+
+  await recordAuditLog({
+    orgId: params.org.id,
+    actorUid: params.requester.uid,
+    actorName: params.requester.name,
+    actorRole: params.requester.role,
+    action: 'leave.requested',
+    targetType: 'leave',
+    targetId: ref.id,
+    summary: `Requested leave from ${params.fromDate} to ${params.toDate}`,
   });
 
   return ref.id;
@@ -76,8 +88,9 @@ export async function decideLeaveRequest(params: {
           personName: params.leave.personName,
           personMemberId: params.leave.personMemberId || '',
           role: params.leave.personRole,
-          managerId:
-            params.leave.personRole === 'member' ? params.leave.toUid : null,
+          managerId: params.leave.personRole === 'member' ? params.leave.toUid : null,
+          teacherUid: params.decidedBy.uid,
+          teacherName: params.decidedBy.name,
           date,
           timestamp: serverTimestamp(),
           status: 'leave',
@@ -99,6 +112,33 @@ export async function decideLeaveRequest(params: {
         ? `Your leave (${params.leave.fromDate} to ${params.leave.toDate}) was approved.`
         : `Your leave (${params.leave.fromDate} to ${params.leave.toDate}) was rejected.`,
   });
+
+  await recordAuditLog({
+    orgId: params.leave.orgId,
+    actorUid: params.decidedBy.uid,
+    actorName: params.decidedBy.name,
+    actorRole: params.decidedBy.role,
+    action: params.decision === 'approved' ? 'leave.approved' : 'leave.rejected',
+    targetType: 'leave',
+    targetId: params.leave.id,
+    summary: `${params.decision === 'approved' ? 'Approved' : 'Rejected'} leave for ${params.leave.personName} (${params.leave.fromDate} to ${params.leave.toDate})`,
+  });
+}
+
+export async function fetchLeavesForStudent(
+  orgId: string,
+  studentUid: string
+): Promise<LeaveRequest[]> {
+  const snap = await getDocs(
+    query(
+      collection(db, 'leaves'),
+      where('orgId', '==', orgId),
+      where('personUid', '==', studentUid)
+    )
+  );
+  return snap.docs
+    .map((d) => ({ ...(d.data() as LeaveRequest), id: d.id }))
+    .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
 }
 
 export async function fetchLeavesForUser(profile: UserProfile): Promise<{
@@ -112,7 +152,7 @@ export async function fetchLeavesForUser(profile: UserProfile): Promise<{
       return tb - ta;
     });
 
-  if (profile.role === 'admin') {
+  if (profile.role === 'admin' || profile.role === 'super_admin') {
     const snap = await getDocs(
       query(collection(db, 'leaves'), where('orgId', '==', profile.orgId))
     );
@@ -150,17 +190,9 @@ export async function fetchLeavesForUser(profile: UserProfile): Promise<{
     };
   }
 
-  const snap = await getDocs(
-    query(
-      collection(db, 'leaves'),
-      where('orgId', '==', profile.orgId),
-      where('personUid', '==', profile.uid)
-    )
-  );
+  const myLeaves = await fetchLeavesForStudent(profile.orgId, profile.uid);
   return {
-    myLeaves: sortByCreated(
-      snap.docs.map((d) => ({ ...(d.data() as LeaveRequest), id: d.id }))
-    ),
+    myLeaves,
     teamLeaves: [],
   };
 }

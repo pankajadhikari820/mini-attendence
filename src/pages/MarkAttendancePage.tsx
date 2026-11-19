@@ -4,6 +4,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import {
   AlertCircle,
   ArrowLeft,
+  BookOpen,
   Camera,
   CameraOff,
   CheckCircle2,
@@ -16,7 +17,12 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
-import type { AttendanceRecord, AttendanceStatus, UserProfile } from '../types';
+import type {
+  AttendanceRecord,
+  AttendanceStatus,
+  FacultyAssignment,
+  UserProfile,
+} from '../types';
 import {
   bulkMarkAttendance,
   fetchAttendanceForManager,
@@ -25,7 +31,8 @@ import {
   markAttendanceViaQR,
   type QRScanResult,
 } from '../services/attendanceService';
-import { fetchManagerMembers, fetchOrgUsers } from '../services/userService';
+import { subscribeFacultyAssignments } from '../services/academicService';
+import { fetchManagerMembers, fetchOrgUsers, fetchUsersByClass } from '../services/userService';
 import {
   getFirebaseErrorKey,
   getInitials,
@@ -36,15 +43,21 @@ import {
 import { Layout } from '../components/Layout';
 import { CardSkeleton, EmptyState } from '../components/Skeletons';
 
-const STATUSES: AttendanceStatus[] = ['present', 'late', 'absent', 'leave'];
+// Strictly ONLY 3 statuses: PRESENT, ABSENT, LEAVE
+const STATUSES: AttendanceStatus[] = ['present', 'absent', 'leave'];
 
 export const MarkAttendancePage: React.FC = () => {
   const { profile, org, getRoleLabel } = useAuth();
   const { t, formatNumber } = useTranslation();
   const { showToast } = useToast();
 
+  const isAdmin = profile?.role === 'admin' || profile?.role === 'super_admin';
   const today = useMemo(() => getOrgDateString(org?.timezone || 'Asia/Kolkata'), [org?.timezone]);
   const [tab, setTab] = useState<'scan' | 'manual'>('scan');
+
+  // Assigned classes & subjects for subject-wise backup marking
+  const [assignments, setAssignments] = useState<FacultyAssignment[]>([]);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>('');
 
   // Scanner state
   const [cameraRunning, setCameraRunning] = useState(false);
@@ -69,16 +82,50 @@ export const MarkAttendancePage: React.FC = () => {
   const [savingUid, setSavingUid] = useState<string | null>(null);
   const [bulkSaving, setBulkSaving] = useState(false);
 
-  const canEditSelectedDate = profile?.role === 'admin' || selectedDate === today;
+  const canEditSelectedDate = isAdmin || selectedDate === today;
 
-  // Load direct subordinates and attendance for selectedDate
+  useEffect(() => {
+    if (!org || !profile) return;
+    return subscribeFacultyAssignments(
+      org.id,
+      (list) => {
+        setAssignments(list);
+        if (!selectedAssignmentId && list.length > 0 && !isAdmin) {
+          setSelectedAssignmentId(list[0].id);
+        }
+      },
+      isAdmin ? undefined : profile.uid
+    );
+  }, [org, profile, isAdmin, selectedAssignmentId]);
+
+  const selectedAssignment = useMemo(
+    () => assignments.find((a) => a.id === selectedAssignmentId) || null,
+    [assignments, selectedAssignmentId]
+  );
+
+  // Load subordinates/class students and attendance for selectedDate & subject
   const loadManualData = useCallback(async () => {
     if (!org || !profile) return;
     setLoadingManual(true);
     try {
       let directPeople: UserProfile[] = [];
       let recs: AttendanceRecord[] = [];
-      if (profile.role === 'admin') {
+
+      if (selectedAssignment) {
+        [directPeople, recs] = await Promise.all([
+          fetchUsersByClass(org.id, selectedAssignment.classId),
+          isAdmin
+            ? fetchAttendanceForOrg(org.id, {
+                date: selectedDate,
+                classId: selectedAssignment.classId,
+                subjectId: selectedAssignment.subjectId,
+              })
+            : fetchAttendanceForManager(org.id, profile.uid, {
+                date: selectedDate,
+                subjectId: selectedAssignment.subjectId,
+              }),
+        ]);
+      } else if (isAdmin) {
         [directPeople, recs] = await Promise.all([
           fetchOrgUsers(org.id, 'manager'),
           fetchAttendanceForOrg(org.id, { date: selectedDate }),
@@ -96,6 +143,9 @@ export const MarkAttendancePage: React.FC = () => {
       const map = new Map<string, AttendanceRecord>();
       const notes: Record<string, string> = {};
       for (const r of recs) {
+        if (selectedAssignment && r.subjectId && r.subjectId !== selectedAssignment.subjectId) {
+          continue;
+        }
         map.set(r.personUid, r);
         if (r.note) notes[r.personUid] = r.note;
       }
@@ -104,10 +154,8 @@ export const MarkAttendancePage: React.FC = () => {
 
       if (selectedDate === today) {
         const directUidSet = new Set(activeDirect.map((p) => p.uid));
-        const todayCount = recs.filter(
-          (r) =>
-            directUidSet.has(r.personUid) &&
-            (r.status === 'present' || r.status === 'late')
+        const todayCount = Array.from(map.values()).filter(
+          (r) => directUidSet.has(r.personUid) && r.status === 'present'
         ).length;
         setScannedTodayCount(todayCount);
       }
@@ -116,36 +164,31 @@ export const MarkAttendancePage: React.FC = () => {
     } finally {
       setLoadingManual(false);
     }
-  }, [org, profile, selectedDate, today, showToast, t]);
+  }, [org, profile, isAdmin, selectedAssignment, selectedDate, today, showToast, t]);
 
   useEffect(() => {
     loadManualData();
   }, [loadManualData]);
 
-  // Stop camera cleanly
   const stopCamera = useCallback(async () => {
     const instance = scannerRef.current;
     scannerRef.current = null;
     if (instance) {
       try {
-        if (instance.isScanning) {
-          await instance.stop();
-        }
+        if (instance.isScanning) await instance.stop();
         instance.clear();
       } catch {
-        // Ignore stop cleanup error
+        // Ignore
       }
     }
     setCameraRunning(false);
   }, []);
 
-  // Handle a decoded QR string
   const handleDecodedQR = useCallback(
     async (decodedText: string) => {
       if (!org || !profile) return;
       const now = Date.now();
       const lastTime = cooldownMapRef.current.get(decodedText) || 0;
-      // 2-second cooldown on the same QR to prevent double scans
       if (now - lastTime < 2000) return;
       if (busyScanRef.current) return;
 
@@ -158,13 +201,23 @@ export const MarkAttendancePage: React.FC = () => {
           rawText: decodedText,
           org,
           marker: profile,
+          subjectMeta: selectedAssignment
+            ? {
+                departmentId: selectedAssignment.departmentId || null,
+                departmentName: selectedAssignment.departmentName || '',
+                classId: selectedAssignment.classId,
+                className: selectedAssignment.className,
+                subjectId: selectedAssignment.subjectId,
+                subjectName: selectedAssignment.subjectName,
+                subjectCode: selectedAssignment.subjectCode || '',
+              }
+            : undefined,
         });
         setLastResult(res);
         if (res.ok) {
           playBeep(true);
           triggerVibration(true);
           setScannedTodayCount((c) => c + 1);
-          // Refresh manual map in background if viewing today
           if (selectedDate === today) {
             loadManualData();
           }
@@ -181,7 +234,7 @@ export const MarkAttendancePage: React.FC = () => {
         setProcessingScan(false);
       }
     },
-    [org, profile, selectedDate, today, loadManualData]
+    [org, profile, selectedAssignment, selectedDate, today, loadManualData]
   );
 
   const startCamera = useCallback(
@@ -199,26 +252,15 @@ export const MarkAttendancePage: React.FC = () => {
         scannerRef.current = scanner;
         await scanner.start(
           { facingMode: mode },
-          {
-            fps: 10,
-            qrbox: { width: 240, height: 240 },
-            aspectRatio: 1,
-          },
+          { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1 },
           (decodedText) => {
             handleDecodedQR(decodedText);
           },
-          () => {
-            // Ignore frame decode misses
-          }
+          () => {}
         );
         setCameraRunning(true);
-      } catch (err) {
-        const msg = (err as Error)?.message || '';
-        setCameraError(
-          msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('notallowed')
-            ? t('attendance.cameraPermissionDesc')
-            : `${t('attendance.cameraPermissionDesc')}`
-        );
+      } catch {
+        setCameraError(t('attendance.cameraPermissionDesc'));
         setCameraRunning(false);
       }
     },
@@ -228,15 +270,11 @@ export const MarkAttendancePage: React.FC = () => {
   const handleSwitchCamera = async () => {
     const next = facingMode === 'environment' ? 'user' : 'environment';
     setFacingMode(next);
-    if (cameraRunning) {
-      await startCamera(next);
-    }
+    if (cameraRunning) await startCamera(next);
   };
 
   useEffect(() => {
-    if (tab !== 'scan' && cameraRunning) {
-      stopCamera();
-    }
+    if (tab !== 'scan' && cameraRunning) stopCamera();
   }, [tab, cameraRunning, stopCamera]);
 
   useEffect(() => {
@@ -245,7 +283,6 @@ export const MarkAttendancePage: React.FC = () => {
     };
   }, [stopCamera]);
 
-  // Manual marking handlers
   const filteredPeople = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return people;
@@ -253,9 +290,22 @@ export const MarkAttendancePage: React.FC = () => {
       (p) =>
         p.name.toLowerCase().includes(q) ||
         (p.memberId || '').toLowerCase().includes(q) ||
-        (p.rollNumber || '').toLowerCase().includes(q)
+        (p.rollNumber || '').toLowerCase().includes(q) ||
+        (p.enrollmentNumber || '').toLowerCase().includes(q)
     );
   }, [people, searchQuery]);
+
+  const subjectMeta = selectedAssignment
+    ? {
+        departmentId: selectedAssignment.departmentId || null,
+        departmentName: selectedAssignment.departmentName || '',
+        classId: selectedAssignment.classId,
+        className: selectedAssignment.className,
+        subjectId: selectedAssignment.subjectId,
+        subjectName: selectedAssignment.subjectName,
+        subjectCode: selectedAssignment.subjectCode || '',
+      }
+    : undefined;
 
   const handleSingleMark = async (person: UserProfile, status: AttendanceStatus) => {
     if (!org || !profile || !canEditSelectedDate) return;
@@ -268,6 +318,7 @@ export const MarkAttendancePage: React.FC = () => {
         date: selectedDate,
         status,
         note: notesByUid[person.uid] || '',
+        subjectMeta,
       });
       showToast(t('attendance.savedToast'), 'success');
       await loadManualData();
@@ -311,6 +362,7 @@ export const MarkAttendancePage: React.FC = () => {
         marker: profile,
         entries,
         date: selectedDate,
+        subjectMeta,
       });
       showToast(t('attendance.bulkSavedToast'), 'success');
       setCheckedUids(new Set());
@@ -322,8 +374,11 @@ export const MarkAttendancePage: React.FC = () => {
     }
   };
 
-  const targetRoleLabel =
-    profile?.role === 'admin' ? getRoleLabel('manager') : getRoleLabel('member');
+  const targetRoleLabel = selectedAssignment
+    ? `${selectedAssignment.subjectName} · ${selectedAssignment.className}`
+    : isAdmin
+    ? getRoleLabel('manager')
+    : getRoleLabel('member');
 
   return (
     <Layout title={t('attendance.title')}>
@@ -348,7 +403,7 @@ export const MarkAttendancePage: React.FC = () => {
             <h2 className="text-2xl font-bold tracking-tight text-stone-900 dark:text-stone-50">
               {t('attendance.title')}
             </h2>
-            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 flex items-center gap-2">
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 flex flex-wrap items-center gap-2">
               <span>{targetRoleLabel}</span>
               <span>·</span>
               <span className="tabular-nums">
@@ -395,6 +450,28 @@ export const MarkAttendancePage: React.FC = () => {
           </div>
         </div>
 
+        {/* Assigned Class / Subject Selector */}
+        {assignments.length > 0 && (
+          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <label className="text-xs font-semibold text-stone-600 dark:text-stone-300 flex items-center gap-1.5 whitespace-nowrap">
+              <BookOpen className="w-4 h-4 text-[#C25E00]" />
+              <span>{t('session.selectAssignedSubject')}:</span>
+            </label>
+            <select
+              value={selectedAssignmentId}
+              onChange={(e) => setSelectedAssignmentId(e.target.value)}
+              className="flex-1 rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
+            >
+              {isAdmin && <option value="">{t('session.generalStaffSession')}</option>}
+              {assignments.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.subjectName} ({a.subjectCode || '—'}) — {a.className}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* SCAN QR TAB */}
         {tab === 'scan' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -419,14 +496,13 @@ export const MarkAttendancePage: React.FC = () => {
                 )}
               </div>
 
-              {cameraError && cameraRunning === false && (
+              {cameraError && !cameraRunning && (
                 <div className="mt-4 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4 text-xs text-amber-900 dark:text-amber-200">
                   <p className="font-semibold">{t('attendance.cameraPermissionTitle')}</p>
                   <p className="mt-1">{t('attendance.cameraPermissionDesc')}</p>
                 </div>
               )}
 
-              {/* Touch-friendly Scanner Controls */}
               <div className="mt-4 grid grid-cols-2 gap-3">
                 {cameraRunning ? (
                   <button
@@ -459,7 +535,6 @@ export const MarkAttendancePage: React.FC = () => {
               </div>
             </div>
 
-            {/* Result Card */}
             <div className="lg:col-span-5 space-y-4">
               <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-6">
                 <div className="flex items-center justify-between">
@@ -490,9 +565,7 @@ export const MarkAttendancePage: React.FC = () => {
                   <div className="flex items-center gap-4">
                     <div
                       className={`w-14 h-14 rounded-2xl flex items-center justify-center text-lg font-bold shrink-0 ${
-                        lastResult.ok
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-red-600 text-white'
+                        lastResult.ok ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
                       }`}
                     >
                       {lastResult.personName ? (
@@ -532,7 +605,7 @@ export const MarkAttendancePage: React.FC = () => {
           </div>
         )}
 
-        {/* MANUAL TAB */}
+        {/* MANUAL TAB (Strictly PRESENT / ABSENT / LEAVE) */}
         {tab === 'manual' && (
           <div className="space-y-4">
             <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -556,7 +629,7 @@ export const MarkAttendancePage: React.FC = () => {
                     type="date"
                     value={selectedDate}
                     max={today}
-                    disabled={profile?.role !== 'admin'}
+                    disabled={!isAdmin}
                     onChange={(e) => setSelectedDate(e.target.value)}
                     className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm disabled:opacity-60"
                   />
@@ -595,7 +668,7 @@ export const MarkAttendancePage: React.FC = () => {
             </div>
 
             <p className="text-xs text-stone-500 dark:text-stone-400">
-              {profile?.role === 'admin'
+              {isAdmin
                 ? t('attendance.adminCanCorrectAny')
                 : canEditSelectedDate
                 ? t('attendance.canCorrectToday')
@@ -657,14 +730,12 @@ export const MarkAttendancePage: React.FC = () => {
                           className="rounded-lg border border-stone-200 dark:border-stone-800 bg-transparent px-3 py-1.5 text-xs w-full sm:w-40"
                         />
 
-                        <div className="grid grid-cols-4 gap-1">
+                        <div className="grid grid-cols-3 gap-1.5">
                           {STATUSES.map((st) => {
                             const active = rec?.status === st;
                             const activeStyle =
                               st === 'present'
                                 ? 'bg-emerald-600 text-white border-emerald-600'
-                                : st === 'late'
-                                ? 'bg-amber-600 text-white border-amber-600'
                                 : st === 'absent'
                                 ? 'bg-red-600 text-white border-red-600'
                                 : 'bg-sky-600 text-white border-sky-600';
@@ -674,7 +745,7 @@ export const MarkAttendancePage: React.FC = () => {
                                 type="button"
                                 disabled={!canEditSelectedDate || savingUid === person.uid}
                                 onClick={() => handleSingleMark(person, st)}
-                                className={`px-2.5 py-2 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap ${
+                                className={`px-3 py-2 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap ${
                                   active
                                     ? activeStyle
                                     : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-800'

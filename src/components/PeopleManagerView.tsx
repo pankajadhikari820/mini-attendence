@@ -16,7 +16,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
-import type { UserProfile } from '../types';
+import type { AcademicClass, UserProfile } from '../types';
 import {
   addPersonDirect,
   approvePendingUser,
@@ -27,6 +27,7 @@ import {
   setUserStatus,
   updateUserDetails,
 } from '../services/userService';
+import { fetchClasses } from '../services/academicService';
 import { getFirebaseErrorKey, needsEnglishNameForId } from '../utils/helpers';
 import { Layout } from './Layout';
 import { QRCardModal } from './QRCardModal';
@@ -63,8 +64,10 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
   const [loading, setLoading] = useState(true);
   const [people, setPeople] = useState<UserProfile[]>([]);
   const [managers, setManagers] = useState<UserProfile[]>([]);
+  const [classes, setClasses] = useState<AcademicClass[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending' | 'inactive'>('all');
+  const [classFilter, setClassFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'name' | 'memberId'>('name');
   const [page, setPage] = useState(1);
 
@@ -81,7 +84,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
   const [formEmail, setFormEmail] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formRoll, setFormRoll] = useState('');
+  const [formEnrollment, setFormEnrollment] = useState('');
   const [formManagerId, setFormManagerId] = useState('');
+  const [formClassId, setFormClassId] = useState('');
   const [saving, setSaving] = useState(false);
 
   const showAddEnglishName = needsEnglishNameForId(formName);
@@ -95,6 +100,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
     if (!org || !profile) return;
     setLoading(true);
     try {
+      const [clsList] = await Promise.all([fetchClasses(org.id)]);
+      setClasses(clsList);
+
       if (targetRole === 'manager') {
         const list = await fetchOrgUsers(org.id, 'manager');
         setPeople(list);
@@ -126,17 +134,26 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
     return map;
   }, [managers]);
 
+  const classMap = useMemo(() => {
+    const map = new Map<string, AcademicClass>();
+    for (const c of classes) map.set(c.id, c);
+    return map;
+  }, [classes]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return people
       .filter((p) => {
         if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+        if (classFilter !== 'all' && p.classId !== classFilter) return false;
         if (!q) return true;
         return (
           p.name.toLowerCase().includes(q) ||
           p.email.toLowerCase().includes(q) ||
           (p.memberId || '').toLowerCase().includes(q) ||
-          (p.rollNumber || '').toLowerCase().includes(q)
+          (p.rollNumber || '').toLowerCase().includes(q) ||
+          (p.enrollmentNumber || '').toLowerCase().includes(q) ||
+          (p.className || '').toLowerCase().includes(q)
         );
       })
       .sort((a, b) =>
@@ -144,14 +161,14 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
           ? a.name.localeCompare(b.name)
           : (a.memberId || '').localeCompare(b.memberId || '')
       );
-  }, [people, search, statusFilter, sortBy]);
+  }, [people, search, statusFilter, classFilter, sortBy]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, sortBy]);
+  }, [search, statusFilter, classFilter, sortBy]);
 
   const inviteCode =
     targetRole === 'manager'
@@ -173,7 +190,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
     setFormEmail('');
     setFormPhone('');
     setFormRoll('');
+    setFormEnrollment('');
     setFormManagerId(managers[0]?.uid || '');
+    setFormClassId(classes[0]?.id || '');
     setShowAddModal(true);
   };
 
@@ -182,6 +201,33 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
     setFormName(p.name);
     setFormPhone(p.phone || '');
     setFormRoll(p.rollNumber || '');
+    setFormEnrollment(p.enrollmentNumber || p.rollNumber || '');
+    setFormClassId(p.classId || '');
+    setFormManagerId(p.managerId || '');
+  };
+
+  const buildClassMeta = (clsId: string) => {
+    const cls = classMap.get(clsId);
+    if (!cls) {
+      return {
+        classId: null,
+        className: '',
+        departmentId: null,
+        departmentName: '',
+        courseName: '',
+        semester: '',
+        section: '',
+      };
+    }
+    return {
+      classId: cls.id,
+      className: cls.name,
+      departmentId: cls.departmentId || null,
+      departmentName: cls.departmentName || '',
+      courseName: cls.courseName || '',
+      semester: cls.semester || '',
+      section: cls.section || '',
+    };
   };
 
   const handleAddSubmit = async (e: React.FormEvent) => {
@@ -204,6 +250,8 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             : profile.uid
           : null;
 
+      const classMeta = targetRole === 'member' ? buildClassMeta(formClassId) : {};
+
       const { resetEmailSent } = await addPersonDirect({
         org,
         role: targetRole,
@@ -213,6 +261,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
         email: formEmail,
         phone: formPhone,
         rollNumber: formRoll,
+        enrollmentNumber: formEnrollment || formRoll,
+        ...classMeta,
+        actor: profile,
       });
 
       showToast(
@@ -233,10 +284,16 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
     if (!editingPerson) return;
     setSaving(true);
     try {
+      const classMeta = editingPerson.role === 'member' ? buildClassMeta(formClassId) : {};
       await updateUserDetails(editingPerson.uid, {
         name: formName.trim(),
         phone: formPhone.trim(),
         rollNumber: formRoll.trim(),
+        enrollmentNumber: formEnrollment.trim() || formRoll.trim(),
+        ...(adminViewingAllMembers && editingPerson.role === 'member'
+          ? { managerId: formManagerId || null }
+          : {}),
+        ...classMeta,
       });
       showToast(t('people.personUpdated'), 'success');
       setEditingPerson(null);
@@ -251,7 +308,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
   const handleToggleStatus = async (p: UserProfile) => {
     const next = p.status === 'active' ? 'inactive' : 'active';
     try {
-      await setUserStatus(p.uid, next);
+      await setUserStatus(p.uid, next, profile, org?.id);
       showToast(t('people.personUpdated'), 'success');
       await loadPeople();
     } catch (err) {
@@ -262,7 +319,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
   const handleApprove = async (p: UserProfile) => {
     if (!org) return;
     try {
-      await approvePendingUser(org, p);
+      await approvePendingUser(org, p, profile);
       showToast(t('people.approvedToast'), 'success');
       await loadPeople();
     } catch (err) {
@@ -273,7 +330,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
   const handleReject = async (p: UserProfile) => {
     if (!org) return;
     try {
-      await rejectPendingUser(org.id, p);
+      await rejectPendingUser(org.id, p, profile);
       showToast(t('people.rejectedToast'), 'info');
       await loadPeople();
     } catch (err) {
@@ -284,7 +341,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
   const handleConfirmDelete = async () => {
     if (!confirmDelete) return;
     try {
-      await deleteUserProfile(confirmDelete);
+      await deleteUserProfile(confirmDelete, profile);
       showToast(t('people.personRemoved'), 'success');
       setConfirmDelete(null);
       await loadPeople();
@@ -349,6 +406,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
     setCsvProgress({ done: 0, total: valid.length, failed: 0 });
     let failed = 0;
     const updatedRows = [...csvRows];
+    const classMeta = targetRole === 'member' ? buildClassMeta(formClassId) : {};
 
     for (let i = 0; i < valid.length; i++) {
       const row = valid[i];
@@ -368,6 +426,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
           email: row.email,
           phone: row.phone,
           rollNumber: row.rollNumber,
+          enrollmentNumber: row.rollNumber,
+          ...classMeta,
+          actor: profile,
         });
       } catch (err) {
         failed++;
@@ -418,13 +479,14 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            {(!adminViewingAllMembers || managers.length > 0) && (
+            {(!adminViewingAllMembers || managers.length > 0 || classes.length > 0) && (
               <>
                 <button
                   type="button"
                   onClick={() => {
                     setCsvRows([]);
                     setFormManagerId(managers[0]?.uid || '');
+                    setFormClassId(classes[0]?.id || '');
                     setShowCsvModal(true);
                   }}
                   className="inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] hover:bg-stone-50 dark:hover:bg-stone-800 px-3.5 py-2 text-sm font-medium transition-colors"
@@ -460,7 +522,22 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {targetRole === 'member' && classes.length > 0 && (
+              <select
+                value={classFilter}
+                onChange={(e) => setClassFilter(e.target.value)}
+                className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] px-3 py-2.5 text-sm"
+              >
+                <option value="all">{t('academics.allClasses')}</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
@@ -491,7 +568,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             title={t('people.emptyTitle')}
             description={t('people.emptyDesc')}
             actionLabel={
-              !adminViewingAllMembers || managers.length > 0
+              !adminViewingAllMembers || managers.length > 0 || classes.length > 0
                 ? `${t('people.addPerson')} ${roleLabel}`
                 : undefined
             }
@@ -505,6 +582,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
                   <tr>
                     <th className="py-3 px-4 font-medium">{t('common.name')}</th>
                     <th className="py-3 px-4 font-medium">{t('common.memberId')}</th>
+                    {targetRole === 'member' && (
+                      <th className="py-3 px-4 font-medium">{t('academics.classSection')}</th>
+                    )}
                     {adminViewingAllMembers && (
                       <th className="py-3 px-4 font-medium">{managerLabel}</th>
                     )}
@@ -530,7 +610,9 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
                         </p>
                         <p className="text-xs text-stone-500 dark:text-stone-400">
                           {person.email}
-                          {person.rollNumber ? ` · #${person.rollNumber}` : ''}
+                          {person.enrollmentNumber || person.rollNumber
+                            ? ` · #${person.enrollmentNumber || person.rollNumber}`
+                            : ''}
                         </p>
                       </td>
                       <td className="py-3 px-4 font-mono text-xs text-stone-700 dark:text-stone-300 whitespace-nowrap">
@@ -541,6 +623,11 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
                           </div>
                         )}
                       </td>
+                      {targetRole === 'member' && (
+                        <td className="py-3 px-4 text-xs text-stone-600 dark:text-stone-400">
+                          {person.className || '—'}
+                        </td>
+                      )}
                       {adminViewingAllMembers && (
                         <td className="py-3 px-4 text-xs text-stone-600 dark:text-stone-400">
                           {(person.managerId && managerNameMap.get(person.managerId)) || '—'}
@@ -643,7 +730,6 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
               </table>
             </div>
 
-            {/* Pagination */}
             {totalPages > 1 && (
               <div className="px-4 py-3 border-t border-stone-200 dark:border-stone-800 flex items-center justify-between text-xs text-stone-500">
                 <span className="tabular-nums">
@@ -676,7 +762,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
       {/* Add Person Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-6 shadow-xl">
+          <div className="w-full max-w-md rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold">
                 {t('people.addPerson')} {roleLabel}
@@ -736,15 +822,38 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">{t('common.rollNumber')}</label>
+                  <label className="block text-sm font-medium mb-1">{t('qr.enrollmentNo')}</label>
                   <input
                     type="text"
-                    value={formRoll}
-                    onChange={(e) => setFormRoll(e.target.value)}
+                    value={formEnrollment}
+                    onChange={(e) => {
+                      setFormEnrollment(e.target.value);
+                      setFormRoll(e.target.value);
+                    }}
                     className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
                   />
                 </div>
               </div>
+
+              {targetRole === 'member' && classes.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    {t('academics.classSection')}
+                  </label>
+                  <select
+                    value={formClassId}
+                    onChange={(e) => setFormClassId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2 text-sm"
+                  >
+                    <option value="">{t('academics.unassigned')}</option>
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {adminViewingAllMembers && managers.length > 0 && (
                 <div>
@@ -754,6 +863,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
                     onChange={(e) => setFormManagerId(e.target.value)}
                     className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2 text-sm"
                   >
+                    <option value="">{t('academics.unassigned')}</option>
                     {managers.map((m) => (
                       <option key={m.uid} value={m.uid}>
                         {m.name} ({m.memberId})
@@ -809,24 +919,68 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
                   className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">{t('common.phone')}</label>
-                <input
-                  type="tel"
-                  value={formPhone}
-                  onChange={(e) => setFormPhone(e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('common.phone')}</label>
+                  <input
+                    type="tel"
+                    value={formPhone}
+                    onChange={(e) => setFormPhone(e.target.value)}
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">{t('qr.enrollmentNo')}</label>
+                  <input
+                    type="text"
+                    value={formEnrollment}
+                    onChange={(e) => {
+                      setFormEnrollment(e.target.value);
+                      setFormRoll(e.target.value);
+                    }}
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">{t('common.rollNumber')}</label>
-                <input
-                  type="text"
-                  value={formRoll}
-                  onChange={(e) => setFormRoll(e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2 text-sm"
-                />
-              </div>
+
+              {editingPerson.role === 'member' && classes.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    {t('academics.classSection')}
+                  </label>
+                  <select
+                    value={formClassId}
+                    onChange={(e) => setFormClassId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2 text-sm"
+                  >
+                    <option value="">{t('academics.unassigned')}</option>
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {adminViewingAllMembers && editingPerson.role === 'member' && managers.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">{managerLabel}</label>
+                  <select
+                    value={formManagerId}
+                    onChange={(e) => setFormManagerId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3.5 py-2 text-sm"
+                  >
+                    <option value="">{t('academics.unassigned')}</option>
+                    {managers.map((m) => (
+                      <option key={m.uid} value={m.uid}>
+                        {m.name} ({m.memberId})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -860,22 +1014,42 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             </div>
             <p className="text-sm text-stone-500 dark:text-stone-400">{t('people.csvHint')}</p>
 
-            {adminViewingAllMembers && managers.length > 0 && (
-              <div className="mt-3">
-                <label className="block text-xs font-medium mb-1">{managerLabel}</label>
-                <select
-                  value={formManagerId}
-                  onChange={(e) => setFormManagerId(e.target.value)}
-                  className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-1.5 text-sm"
-                >
-                  {managers.map((m) => (
-                    <option key={m.uid} value={m.uid}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="mt-3 flex flex-wrap gap-3">
+              {targetRole === 'member' && classes.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium mb-1">{t('academics.classSection')}</label>
+                  <select
+                    value={formClassId}
+                    onChange={(e) => setFormClassId(e.target.value)}
+                    className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-1.5 text-sm"
+                  >
+                    <option value="">{t('academics.unassigned')}</option>
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {adminViewingAllMembers && managers.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium mb-1">{managerLabel}</label>
+                  <select
+                    value={formManagerId}
+                    onChange={(e) => setFormManagerId(e.target.value)}
+                    className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-1.5 text-sm"
+                  >
+                    {managers.map((m) => (
+                      <option key={m.uid} value={m.uid}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <label className="inline-flex items-center gap-2 rounded-xl bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 px-4 py-2 text-sm font-medium cursor-pointer">
@@ -988,7 +1162,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
         </div>
       )}
 
-      {/* QR Card Modal */}
+      {/* Digital Student ID Card Modal */}
       {qrPerson && org && (
         <QRCardModal
           person={qrPerson}

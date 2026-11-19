@@ -3,15 +3,19 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   Bell,
+  BookOpen,
+  Building2,
   CalendarClock,
+  CalendarDays,
   CheckCircle2,
   ClipboardList,
+  GraduationCap,
   LayoutDashboard,
   LogOut,
   Megaphone,
-  QrCode,
   ScanLine,
   Settings,
+  ShieldCheck,
   Users,
   UserCog,
 } from 'lucide-react';
@@ -28,6 +32,7 @@ import { Logo } from './Logo';
 import { LanguageToggle } from './LanguageToggle';
 import { ThemeToggle } from './ThemeToggle';
 import { PWAInstallButton } from './PWAInstallButton';
+import { getHomePathForRole } from './ProtectedRoute';
 
 interface LayoutProps {
   title?: string;
@@ -69,18 +74,35 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
 
   const managerLabel = getRoleLabel('manager');
   const memberLabel = getRoleLabel('member');
+  const homePath = getHomePathForRole(profile?.role);
 
   const navItems: NavItem[] = (() => {
+    if (profile?.role === 'super_admin') {
+      return [
+        { to: '/super-admin', label: t('nav.organizations'), icon: Building2, mobile: true },
+        { to: '/admin', label: t('nav.dashboard'), icon: LayoutDashboard, mobile: true },
+        { to: '/academics', label: t('nav.academics'), icon: BookOpen },
+        { to: '/timetable', label: t('nav.timetable'), icon: CalendarDays },
+        { to: '/admin/managers', label: managerLabel, icon: UserCog },
+        { to: '/admin/members', label: memberLabel, icon: Users },
+        { to: '/reports', label: t('nav.reports'), icon: BarChart3, mobile: true },
+        { to: '/audit-logs', label: t('nav.auditLogs'), icon: ShieldCheck, mobile: true },
+        { to: '/settings', label: t('nav.settings'), icon: Settings, mobile: true },
+      ];
+    }
     if (profile?.role === 'admin') {
       return [
         { to: '/admin', label: t('nav.dashboard'), icon: LayoutDashboard, mobile: true },
         { to: '/attendance', label: t('nav.startAttendance'), icon: ScanLine, mobile: true },
-        { to: '/attendance/manual', label: t('nav.manualBackup'), icon: ClipboardList },
+        { to: '/academics', label: t('nav.academics'), icon: BookOpen },
+        { to: '/timetable', label: t('nav.timetable'), icon: CalendarDays },
         { to: '/admin/managers', label: managerLabel, icon: UserCog, mobile: true },
         { to: '/admin/members', label: memberLabel, icon: Users },
+        { to: '/attendance/manual', label: t('nav.manualBackup'), icon: ClipboardList },
         { to: '/reports', label: t('nav.reports'), icon: BarChart3, mobile: true },
         { to: '/leaves', label: t('nav.leaves'), icon: CalendarClock },
         { to: '/announcements', label: t('nav.announcements'), icon: Megaphone },
+        { to: '/audit-logs', label: t('nav.auditLogs'), icon: ShieldCheck },
         { to: '/settings', label: t('nav.settings'), icon: Settings, mobile: true },
       ];
     }
@@ -88,7 +110,8 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
       return [
         { to: '/manager', label: t('nav.dashboard'), icon: LayoutDashboard, mobile: true },
         { to: '/attendance', label: t('nav.startAttendance'), icon: ScanLine, mobile: true },
-        { to: '/mark', label: t('nav.markYourAttendance'), icon: CheckCircle2, mobile: true },
+        { to: '/timetable', label: t('nav.timetable'), icon: CalendarDays, mobile: true },
+        { to: '/mark', label: t('nav.markYourAttendance'), icon: CheckCircle2 },
         { to: '/attendance/manual', label: t('nav.manualBackup'), icon: ClipboardList },
         { to: '/manager/members', label: memberLabel, icon: Users },
         { to: '/reports', label: t('nav.reports'), icon: BarChart3, mobile: true },
@@ -97,11 +120,20 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
         { to: '/settings', label: t('nav.settings'), icon: Settings, mobile: true },
       ];
     }
+    if (profile?.role === 'parent') {
+      return [
+        { to: '/parent', label: t('nav.parentPortal'), icon: GraduationCap, mobile: true },
+        { to: '/timetable', label: t('nav.timetable'), icon: CalendarDays, mobile: true },
+        { to: '/announcements', label: t('nav.announcements'), icon: Megaphone, mobile: true },
+        { to: '/settings', label: t('nav.settings'), icon: Settings, mobile: true },
+      ];
+    }
     return [
+      { to: '/member', label: t('nav.dashboard'), icon: LayoutDashboard, mobile: true },
       { to: '/mark', label: t('nav.markYourAttendance'), icon: ScanLine, mobile: true },
-      { to: '/member', label: t('nav.myQr'), icon: QrCode, mobile: true },
+      { to: '/timetable', label: t('nav.timetable'), icon: CalendarDays, mobile: true },
       { to: '/leaves', label: t('nav.leaves'), icon: CalendarClock, mobile: true },
-      { to: '/announcements', label: t('nav.announcements'), icon: Megaphone, mobile: true },
+      { to: '/announcements', label: t('nav.announcements'), icon: Megaphone },
       { to: '/settings', label: t('nav.settings'), icon: Settings, mobile: true },
     ];
   })();
@@ -113,6 +145,17 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
     navigate('/login');
   };
 
+  const roleBadgeText =
+    profile?.role === 'super_admin'
+      ? t('common.superAdmin')
+      : profile?.role === 'admin'
+      ? t('common.admin')
+      : profile?.role === 'manager'
+      ? managerLabel
+      : profile?.role === 'parent'
+      ? t('common.parent')
+      : memberLabel;
+
   const pageHeading =
     title || navItems.find((item) => item.to === location.pathname)?.label || t('nav.dashboard');
 
@@ -121,29 +164,34 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
       {/* Desktop Sidebar */}
       <aside className="hidden md:flex md:flex-col md:w-60 lg:w-64 border-r border-stone-200 dark:border-stone-800 bg-white dark:bg-[#141416] fixed inset-y-0 left-0 z-30 no-print">
         <div className="h-16 px-5 flex items-center border-b border-stone-200 dark:border-stone-800">
-          <Link to={profile?.role === 'admin' ? '/admin' : profile?.role === 'manager' ? '/manager' : '/member'}>
+          <Link to={homePath}>
             <Logo />
           </Link>
         </div>
 
         {org && (
-          <div className="px-5 py-3.5 border-b border-stone-100 dark:border-stone-800/80">
-            <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
-              {org.name}
-            </p>
-            <p className="text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5">
-              {profile?.role === 'admin'
-                ? t('common.admin')
-                : profile?.role === 'manager'
-                ? managerLabel
-                : memberLabel}
-              {profile?.memberId ? ` · ${profile.memberId}` : ''}
-            </p>
+          <div className="px-5 py-3.5 border-b border-stone-100 dark:border-stone-800/80 flex items-center gap-2.5">
+            {org.logoUrl && (
+              <img
+                src={org.logoUrl}
+                alt={org.name}
+                className="w-8 h-8 rounded-lg object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+              />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
+                {org.name}
+              </p>
+              <p className="text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5 font-mono">
+                {roleBadgeText}
+                {profile?.memberId ? ` · ${profile.memberId}` : ''}
+              </p>
+            </div>
           </div>
         )}
 
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          {profile?.role === 'admin' || profile?.role === 'manager' ? (
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
+          {profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'super_admin' ? (
             <Link
               to="/attendance"
               className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors"
@@ -151,7 +199,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
               <ScanLine className="w-4 h-4" />
               <span className="whitespace-nowrap">{t('nav.startAttendance')}</span>
             </Link>
-          ) : (
+          ) : profile?.role === 'member' ? (
             <Link
               to="/mark"
               className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors"
@@ -159,7 +207,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
               <ScanLine className="w-4 h-4" />
               <span className="whitespace-nowrap">{t('nav.markYourAttendance')}</span>
             </Link>
-          )}
+          ) : null}
 
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -171,10 +219,12 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
                   item.to === '/admin' ||
                   item.to === '/manager' ||
                   item.to === '/member' ||
+                  item.to === '/parent' ||
+                  item.to === '/super-admin' ||
                   item.to === '/attendance'
                 }
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                  `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                     isActive
                       ? 'bg-stone-100 dark:bg-stone-800/90 text-stone-900 dark:text-stone-100'
                       : 'text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800/50 hover:text-stone-900 dark:hover:text-stone-100'
@@ -190,9 +240,17 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
 
         <div className="p-3 border-t border-stone-200 dark:border-stone-800 space-y-2">
           <div className="flex items-center gap-2.5 px-2 py-1.5">
-            <div className="w-8 h-8 rounded-full bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-200 flex items-center justify-center text-xs font-semibold shrink-0">
-              {getInitials(profile?.name || '')}
-            </div>
+            {profile?.photoUrl ? (
+              <img
+                src={profile.photoUrl}
+                alt={profile.name}
+                className="w-8 h-8 rounded-full object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-200 flex items-center justify-center text-xs font-semibold shrink-0">
+                {getInitials(profile?.name || '')}
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
                 {profile?.name}
@@ -215,7 +273,6 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col md:pl-60 lg:pl-64 min-w-0">
-        {/* Top Header */}
         <header className="sticky top-0 z-20 h-14 md:h-16 border-b border-stone-200 dark:border-stone-800 bg-[#FAF9F6]/90 dark:bg-[#0F0F11]/90 backdrop-blur-md px-4 md:px-8 flex items-center justify-between gap-4 no-print">
           <div className="flex items-center gap-3 min-w-0">
             <div className="md:hidden">
@@ -304,7 +361,6 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
           </div>
         </header>
 
-        {/* Main Viewport */}
         <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 pb-24 md:py-8 md:pb-10">
           {children}
         </main>
@@ -325,13 +381,13 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
                 item.to === '/admin' ||
                 item.to === '/manager' ||
                 item.to === '/member' ||
+                item.to === '/parent' ||
+                item.to === '/super-admin' ||
                 item.to === '/attendance'
               }
               className={({ isActive }) =>
                 `flex flex-col items-center justify-center gap-0.5 min-w-[56px] py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
-                  isActive
-                    ? 'text-[#C25E00]'
-                    : 'text-stone-500 dark:text-stone-400'
+                  isActive ? 'text-[#C25E00]' : 'text-stone-500 dark:text-stone-400'
                 }`
               }
             >

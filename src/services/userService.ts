@@ -1,5 +1,6 @@
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
@@ -19,6 +20,7 @@ import {
   generateCandidateUserId,
   generateCode,
 } from '../utils/helpers';
+import { recordAuditLog } from './auditService';
 import { createNotification } from './communicationService';
 
 export async function generateUniqueManagerCode(): Promise<string> {
@@ -32,10 +34,22 @@ export async function generateUniqueManagerCode(): Promise<string> {
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
+export async function lookupUserId(code: string): Promise<{
+  uid: string;
+  orgId: string;
+  role: UserRole;
+} | null> {
+  const clean = code.trim().toUpperCase();
+  if (!clean) return null;
+  const snap = await getDoc(doc(db, 'userIds', clean));
+  if (!snap.exists()) return null;
+  const data = snap.data() as { uid: string; orgId: string; role: UserRole };
+  return data;
+}
+
 /**
  * Atomically reserves a globally unique 6-character ID (e.g. PAN482)
  * using a Firestore transaction on the `userIds/{ID}` lookup collection.
- * Retries up to 30 times with new random 3 digits; if exhausted, changes the 3rd letter.
  */
 export async function allocateUniqueUserId(params: {
   nameForId: string;
@@ -79,19 +93,29 @@ export async function allocateUniqueUserId(params: {
 }
 
 /**
- * Directly adds a Manager (by Admin) or Member (by Manager/Admin).
+ * Directly adds a Manager/Teacher, Student/Member, or Parent.
  * Uses the secondary Firebase Auth instance so the current user stays signed in.
  */
 export async function addPersonDirect(params: {
   org: Organization;
-  role: 'manager' | 'member';
+  role: 'manager' | 'member' | 'parent';
   managerId: string | null;
   name: string;
   englishName?: string;
   email: string;
   phone: string;
   rollNumber?: string;
+  enrollmentNumber?: string;
+  classId?: string | null;
+  className?: string;
+  departmentId?: string | null;
+  departmentName?: string;
+  courseName?: string;
+  semester?: string;
+  section?: string;
+  photoUrl?: string;
   language?: LanguageCode;
+  actor?: UserProfile | null;
 }): Promise<{ profile: UserProfile; resetEmailSent: boolean }> {
   const cleanEmail = params.email.trim().toLowerCase();
   const { uid, resetEmailSent } = await createSecondaryAccount(cleanEmail);
@@ -115,34 +139,56 @@ export async function addPersonDirect(params: {
     });
   }
 
-  const userDoc: Omit<UserProfile, 'createdAt'> & { createdAt: ReturnType<typeof serverTimestamp> } = {
+  const userDoc: Record<string, unknown> = {
     uid,
     name: params.name.trim(),
     ...(params.englishName?.trim() ? { englishName: params.englishName.trim() } : {}),
     email: cleanEmail,
     phone: params.phone.trim(),
     rollNumber: params.rollNumber?.trim() || '',
+    enrollmentNumber: params.enrollmentNumber?.trim() || params.rollNumber?.trim() || '',
     role: params.role,
     orgId: params.org.id,
     managerId: params.role === 'member' ? params.managerId : null,
     memberId,
     status: 'active',
     ...(managerCode ? { managerCode } : {}),
+    ...(params.classId ? { classId: params.classId } : {}),
+    ...(params.className ? { className: params.className } : {}),
+    ...(params.departmentId ? { departmentId: params.departmentId } : {}),
+    ...(params.departmentName ? { departmentName: params.departmentName } : {}),
+    ...(params.courseName ? { courseName: params.courseName } : {}),
+    ...(params.semester ? { semester: params.semester } : {}),
+    ...(params.section ? { section: params.section } : {}),
+    ...(params.photoUrl ? { photoUrl: params.photoUrl } : {}),
+    ...(params.role === 'parent' ? { linkedStudentUids: [] } : {}),
     language: params.language || 'en',
     createdAt: serverTimestamp(),
   };
 
   await setDoc(doc(db, 'users', uid), userDoc);
 
+  if (params.actor) {
+    await recordAuditLog({
+      orgId: params.org.id,
+      actorUid: params.actor.uid,
+      actorName: params.actor.name,
+      actorRole: params.actor.role,
+      action: 'user.created',
+      targetType: 'user',
+      targetId: uid,
+      summary: `Added ${params.role} ${params.name.trim()} (${memberId})`,
+    });
+  }
+
   return {
-    profile: { ...userDoc, createdAt: null } as UserProfile,
+    profile: { ...userDoc, createdAt: null } as unknown as UserProfile,
     resetEmailSent,
   };
 }
 
 /**
  * Self-registration for a Manager (using Organization Code) or Member (using Manager Code).
- * Status starts as 'pending' until approved by parent.
  */
 export async function selfRegisterUser(params: {
   role: 'manager' | 'member';
@@ -168,6 +214,7 @@ export async function selfRegisterUser(params: {
     email: cleanEmail,
     phone: params.phone.trim(),
     rollNumber: params.rollNumber?.trim() || '',
+    enrollmentNumber: params.rollNumber?.trim() || '',
     role: params.role,
     orgId: params.orgId,
     managerId: params.role === 'member' ? params.managerId : null,
@@ -193,8 +240,83 @@ export async function selfRegisterUser(params: {
   return uid;
 }
 
-export async function approvePendingUser(org: Organization, person: UserProfile): Promise<void> {
-  if (person.role === 'admin') return;
+/**
+ * Parent self-registration using Organization Code + Child's 6-character Student ID.
+ * Creates a pending parent account and a pending parentLink request for Admin verification.
+ */
+export async function registerParentAccount(params: {
+  orgId: string;
+  adminNotifyUid?: string | null;
+  name: string;
+  englishName?: string;
+  email: string;
+  password: string;
+  phone: string;
+  studentMemberId: string;
+  relationship: string;
+  language: LanguageCode;
+}): Promise<{ uid: string; studentFound: boolean }> {
+  const cleanStudentCode = params.studentMemberId.trim().toUpperCase();
+  const studentLookup = await lookupUserId(cleanStudentCode);
+  if (!studentLookup || studentLookup.orgId !== params.orgId || studentLookup.role !== 'member') {
+    throw new Error('STUDENT_NOT_FOUND');
+  }
+
+  const cleanEmail = params.email.trim().toLowerCase();
+  const cred = await createUserWithEmailAndPassword(auth, cleanEmail, params.password);
+  const uid = cred.user.uid;
+
+  await setDoc(doc(db, 'users', uid), {
+    uid,
+    name: params.name.trim(),
+    ...(params.englishName?.trim() ? { englishName: params.englishName.trim() } : {}),
+    email: cleanEmail,
+    phone: params.phone.trim(),
+    role: 'parent',
+    orgId: params.orgId,
+    managerId: null,
+    memberId: '',
+    linkedStudentUids: [],
+    status: 'pending',
+    language: params.language,
+    createdAt: serverTimestamp(),
+  });
+
+  await addDoc(collection(db, 'parentLinks'), {
+    orgId: params.orgId,
+    parentUid: uid,
+    parentName: params.name.trim(),
+    parentEmail: cleanEmail,
+    studentUid: studentLookup.uid,
+    studentName: '',
+    studentMemberId: cleanStudentCode,
+    relationship: params.relationship.trim() || 'Parent',
+    status: 'pending',
+    createdAt: serverTimestamp(),
+  });
+
+  if (params.adminNotifyUid) {
+    try {
+      await createNotification({
+        orgId: params.orgId,
+        toUid: params.adminNotifyUid,
+        type: 'approval',
+        text: `${params.name.trim()} requested Parent access linked to student ID ${cleanStudentCode}.`,
+      });
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  return { uid, studentFound: true };
+}
+
+export async function approvePendingUser(
+  org: Organization,
+  person: UserProfile,
+  actor?: UserProfile | null
+): Promise<void> {
+  if (person.role === 'admin' || person.role === 'super_admin') return;
   const memberId =
     person.memberId ||
     (await allocateUniqueUserId({
@@ -229,9 +351,26 @@ export async function approvePendingUser(org: Organization, person: UserProfile)
     type: 'approval',
     text: `Your account has been approved. Your unique ID is ${memberId}.`,
   });
+
+  if (actor) {
+    await recordAuditLog({
+      orgId: org.id,
+      actorUid: actor.uid,
+      actorName: actor.name,
+      actorRole: actor.role,
+      action: 'user.approved',
+      targetType: 'user',
+      targetId: person.uid,
+      summary: `Approved ${person.role} ${person.name} (${memberId})`,
+    });
+  }
 }
 
-export async function rejectPendingUser(orgId: string, person: UserProfile): Promise<void> {
+export async function rejectPendingUser(
+  orgId: string,
+  person: UserProfile,
+  actor?: UserProfile | null
+): Promise<void> {
   await updateDoc(doc(db, 'users', person.uid), { status: 'inactive' });
   await createNotification({
     orgId,
@@ -239,20 +378,88 @@ export async function rejectPendingUser(orgId: string, person: UserProfile): Pro
     type: 'approval',
     text: 'Your registration request was not approved.',
   });
+  if (actor) {
+    await recordAuditLog({
+      orgId,
+      actorUid: actor.uid,
+      actorName: actor.name,
+      actorRole: actor.role,
+      action: 'user.rejected',
+      targetType: 'user',
+      targetId: person.uid,
+      summary: `Rejected registration for ${person.name}`,
+    });
+  }
 }
 
 export async function updateUserDetails(
   uid: string,
-  updates: Partial<Pick<UserProfile, 'name' | 'phone' | 'rollNumber' | 'language'>>
+  updates: Partial<
+    Pick<
+      UserProfile,
+      | 'name'
+      | 'phone'
+      | 'rollNumber'
+      | 'enrollmentNumber'
+      | 'language'
+      | 'photoUrl'
+      | 'classId'
+      | 'className'
+      | 'departmentId'
+      | 'departmentName'
+      | 'courseName'
+      | 'semester'
+      | 'section'
+      | 'managerId'
+    >
+  >
 ): Promise<void> {
   await updateDoc(doc(db, 'users', uid), updates as Record<string, unknown>);
 }
 
-export async function setUserStatus(uid: string, status: UserStatus): Promise<void> {
-  await updateDoc(doc(db, 'users', uid), { status });
+export async function updateUserRole(
+  person: UserProfile,
+  newRole: UserRole,
+  actor: UserProfile
+): Promise<void> {
+  await updateDoc(doc(db, 'users', person.uid), { role: newRole });
+  await recordAuditLog({
+    orgId: person.orgId,
+    actorUid: actor.uid,
+    actorName: actor.name,
+    actorRole: actor.role,
+    action: 'user.role_changed',
+    targetType: 'user',
+    targetId: person.uid,
+    summary: `Changed role for ${person.name} from ${person.role} to ${newRole}`,
+  });
 }
 
-export async function deleteUserProfile(person: UserProfile): Promise<void> {
+export async function setUserStatus(
+  uid: string,
+  status: UserStatus,
+  actor?: UserProfile | null,
+  orgId?: string
+): Promise<void> {
+  await updateDoc(doc(db, 'users', uid), { status });
+  if (actor && orgId) {
+    await recordAuditLog({
+      orgId,
+      actorUid: actor.uid,
+      actorName: actor.name,
+      actorRole: actor.role,
+      action: 'user.status_changed',
+      targetType: 'user',
+      targetId: uid,
+      summary: `Set user status to ${status}`,
+    });
+  }
+}
+
+export async function deleteUserProfile(
+  person: UserProfile,
+  actor?: UserProfile | null
+): Promise<void> {
   if (person.managerCode) {
     try {
       await deleteDoc(doc(db, 'managerCodes', person.managerCode));
@@ -268,11 +475,24 @@ export async function deleteUserProfile(person: UserProfile): Promise<void> {
     }
   }
   await deleteDoc(doc(db, 'users', person.uid));
+
+  if (actor) {
+    await recordAuditLog({
+      orgId: person.orgId,
+      actorUid: actor.uid,
+      actorName: actor.name,
+      actorRole: actor.role,
+      action: 'user.deleted',
+      targetType: 'user',
+      targetId: person.uid,
+      summary: `Deleted ${person.role} ${person.name} (${person.memberId})`,
+    });
+  }
 }
 
 export async function fetchOrgUsers(
   orgId: string,
-  role?: 'manager' | 'member'
+  role?: 'manager' | 'member' | 'parent'
 ): Promise<UserProfile[]> {
   const constraints = [where('orgId', '==', orgId)];
   if (role) constraints.push(where('role', '==', role));
@@ -291,6 +511,23 @@ export async function fetchManagerMembers(
     collection(db, 'users'),
     where('orgId', '==', orgId),
     where('managerId', '==', managerUid)
+  );
+  const snap = await getDocs(q);
+  return snap.docs
+    .map((d) => ({ ...(d.data() as UserProfile), uid: d.id }))
+    .filter((u) => u.role === 'member')
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function fetchUsersByClass(
+  orgId: string,
+  classId: string
+): Promise<UserProfile[]> {
+  if (!classId) return [];
+  const q = query(
+    collection(db, 'users'),
+    where('orgId', '==', orgId),
+    where('classId', '==', classId)
   );
   const snap = await getDocs(q);
   return snap.docs

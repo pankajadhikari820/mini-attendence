@@ -10,9 +10,11 @@ interface ProtectedRouteProps {
 }
 
 export function getHomePathForRole(role?: UserRole): string {
+  if (role === 'super_admin') return '/super-admin';
   if (role === 'admin') return '/admin';
   if (role === 'manager') return '/manager';
   if (role === 'member') return '/member';
+  if (role === 'parent') return '/parent';
   return '/login';
 }
 

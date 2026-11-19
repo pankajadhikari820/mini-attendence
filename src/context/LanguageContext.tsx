@@ -25,7 +25,7 @@ export interface LanguageContextValue {
   language: LanguageCode;
   setLanguage: (lang: LanguageCode, syncProfile?: boolean) => void;
   toggleLanguage: () => void;
-  t: (key: string) => string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
   formatDate: (dateStr: string, opts?: Intl.DateTimeFormatOptions) => string;
   formatTime: (date: Date | null | undefined) => string;
   formatNumber: (num: number) => string;
@@ -61,10 +61,15 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [language, setLanguage]);
 
   const t = useCallback(
-    (key: string) => {
+    (key: string, vars?: Record<string, string | number>) => {
       const value = lookupKey(dictionaries[language], key);
-      if (value !== key) return value;
-      return lookupKey(dictionaries.en, key);
+      let result = value !== key ? value : lookupKey(dictionaries.en, key);
+      if (vars) {
+        for (const [k, v] of Object.entries(vars)) {
+          result = result.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+        }
+      }
+      return result;
     },
     [language]
   );

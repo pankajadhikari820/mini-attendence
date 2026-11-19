@@ -10,17 +10,20 @@ import {
   Loader2,
   MapPin,
   RefreshCw,
+  WifiOff,
+  ShieldAlert,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
 import type { AttendanceSession, LiveSessionQRPayload } from '../types';
 import {
-  findActiveParentSession,
+  findEligibleLiveSessions,
   resolveScannedSession,
   submitSelfAttendance,
-  subscribeActiveParentSession,
+  subscribeEligibleLiveSessions,
   type SelfMarkResult,
+  type SessionStreamError,
 } from '../services/sessionService';
 import {
   getCurrentPosition,
@@ -37,11 +40,15 @@ export const MarkYourAttendancePage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const initialTab = searchParams.get('tab') === 'code' ? 'code' : 'scan';
+  const paramSessionId = searchParams.get('sessionId') || '';
   const [tab, setTab] = useState<'scan' | 'code'>(initialTab);
 
-  // Active parent session state (real-time synced)
+  // Active eligible live sessions (real-time synced across all teachers assigned to student's class)
   const [loadingSession, setLoadingSession] = useState(true);
-  const [session, setSession] = useState<AttendanceSession | null>(null);
+  const [sessions, setSessions] = useState<AttendanceSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string>(paramSessionId);
+  const [streamError, setStreamError] = useState<SessionStreamError | null>(null);
+  const [rechecking, setRechecking] = useState(false);
 
   // Step 1: GPS state
   const [readingGps, setReadingGps] = useState(false);
@@ -64,55 +71,23 @@ export const MarkYourAttendancePage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [successResult, setSuccessResult] = useState<SelfMarkResult | null>(null);
 
-  // Manual refresh fallback
-  const refreshActiveSession = useCallback(async () => {
-    if (!profile || !org) return;
-    setLoadingSession(true);
-    setErrorMessage('');
-    try {
-      const active = await findActiveParentSession(profile, org);
-      setSession(active);
-    } catch {
-      setSession(null);
-    } finally {
-      setLoadingSession(false);
+  // Selected active session (auto-defaults to first open session or ?sessionId=)
+  const session = useMemo(() => {
+    if (sessions.length === 0) return null;
+    if (selectedSessionId) {
+      const found = sessions.find((s) => s.id === selectedSessionId);
+      if (found) return found;
     }
-  }, [profile, org]);
+    return sessions[0];
+  }, [sessions, selectedSessionId]);
 
-  // Real-time subscription to parent's LIVE session
   useEffect(() => {
-    if (!profile || !org) return;
-    setLoadingSession(true);
-    const unsub = subscribeActiveParentSession(
-      profile,
-      org,
-      (active) => {
-        setSession(active);
-        setLoadingSession(false);
-      },
-      () => {
-        setLoadingSession(false);
-      }
-    );
-    return () => unsub();
-  }, [profile, org]);
-
-  // Auto-expire locally if session's endsAt passes while screen is open
-  useEffect(() => {
-    if (!session?.endsAt) return;
-    const endMs = session.endsAt.toMillis();
-    const delay = endMs - Date.now();
-    if (delay <= 0) {
-      setSession(null);
-      return;
+    if (sessions.length > 0 && (!selectedSessionId || !sessions.some((s) => s.id === selectedSessionId))) {
+      setSelectedSessionId(sessions[0].id);
     }
-    const timer = window.setTimeout(() => {
-      setSession(null);
-    }, delay + 500);
-    return () => window.clearTimeout(timer);
-  }, [session?.id, session?.endsAt]);
+  }, [sessions, selectedSessionId]);
 
-  // Step 1: Automatically read high-accuracy GPS
+  // Step 1: Read high-accuracy GPS
   const readGpsLocation = useCallback(async () => {
     setReadingGps(true);
     setGpsError(null);
@@ -134,7 +109,62 @@ export const MarkYourAttendancePage: React.FC = () => {
     readGpsLocation();
   }, [readGpsLocation]);
 
-  // Computed distance to active session
+  // Manual "Check again" handler: refreshes both Firestore query AND GPS
+  const refreshActiveSession = useCallback(async () => {
+    if (!profile || !org) return;
+    setRechecking(true);
+    setErrorMessage('');
+    try {
+      const res = await findEligibleLiveSessions(profile, org);
+      setSessions(res.sessions);
+      setStreamError(res.error);
+      if (res.sessions.length > 0) {
+        setSelectedSessionId((prev) =>
+          res.sessions.some((s) => s.id === prev) ? prev : res.sessions[0].id
+        );
+      }
+      readGpsLocation();
+    } finally {
+      setRechecking(false);
+      setLoadingSession(false);
+    }
+  }, [profile, org, readGpsLocation]);
+
+  // Real-time subscription to ALL eligible live sessions
+  useEffect(() => {
+    if (!profile || !org) return;
+    setLoadingSession(true);
+    setStreamError(null);
+
+    const unsub = subscribeEligibleLiveSessions(
+      profile,
+      org,
+      (list) => {
+        setSessions(list);
+        setStreamError(null);
+        setLoadingSession(false);
+      },
+      (err) => {
+        setStreamError(err);
+        setLoadingSession(false);
+      }
+    );
+
+    return () => unsub();
+  }, [profile, org]);
+
+  // Auto-prune expired sessions in real time while screen stays open
+  useEffect(() => {
+    if (sessions.length === 0) return;
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      setSessions((prev) =>
+        prev.filter((s) => !s.endsAt || s.endsAt.toMillis() > now)
+      );
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [sessions.length]);
+
   const distanceMeters = useMemo(() => {
     if (!session || !gps) return null;
     return getFlatEarthDistanceMeters(
@@ -183,11 +213,14 @@ export const MarkYourAttendancePage: React.FC = () => {
       if (!org || !profile) return;
       setErrorMessage('');
 
-      // Determine target session: use active session if matching, otherwise resolve scanned sessionId from Firestore
       let targetSession: AttendanceSession | null = session;
 
       if (mode === 'live_qr' && scannedSessionId) {
-        if (!targetSession || targetSession.id !== scannedSessionId) {
+        const matchedFromList = sessions.find((s) => s.id === scannedSessionId) || null;
+        if (matchedFromList) {
+          targetSession = matchedFromList;
+          setSelectedSessionId(matchedFromList.id);
+        } else {
           setSubmitting(true);
           const resolved = await resolveScannedSession(scannedSessionId, profile, org);
           if (resolved.status !== 'ok') {
@@ -204,7 +237,12 @@ export const MarkYourAttendancePage: React.FC = () => {
             return;
           }
           targetSession = resolved.session;
-          setSession(resolved.session);
+          setSessions((prev) =>
+            prev.some((s) => s.id === resolved.session.id)
+              ? prev
+              : [resolved.session, ...prev]
+          );
+          setSelectedSessionId(resolved.session.id);
         }
       }
 
@@ -253,7 +291,7 @@ export const MarkYourAttendancePage: React.FC = () => {
         setSubmitting(false);
       }
     },
-    [org, profile, session, gps, stopCamera, showToast, reportError, t]
+    [org, profile, session, sessions, gps, stopCamera, showToast, reportError, t]
   );
 
   const handleDecodedLiveQR = useCallback(
@@ -320,8 +358,7 @@ export const MarkYourAttendancePage: React.FC = () => {
         scannerRef.current = scanner;
         await scanner.start({ facingMode: mode }, scannerConfig, onScanSuccess, () => {});
         setCameraRunning(true);
-      } catch (firstErr) {
-        // Desktop webcams sometimes reject facingMode: 'environment'; fallback to first detected camera
+      } catch {
         try {
           const cameras = await Html5Qrcode.getCameras();
           if (cameras && cameras.length > 0) {
@@ -330,21 +367,16 @@ export const MarkYourAttendancePage: React.FC = () => {
             const preferred =
               mode === 'environment'
                 ? cameras.find((c) => /back|rear|environment/i.test(c.label)) || cameras[0]
-                : cameras.find((c) => /front|user|face/i.test(c.label)) || cameras[0];
+                : cameras.find((c) => /front|user/i.test(c.label)) || cameras[0];
             await scanner.start(preferred.id, scannerConfig, onScanSuccess, () => {});
             setCameraRunning(true);
             return;
           }
         } catch {
-          // Fall through to permission error message
+          // Fall through
         }
 
-        const msg = (firstErr as Error)?.message || '';
-        setCameraError(
-          msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('notallowed')
-            ? t('attendance.cameraPermissionDesc')
-            : t('attendance.cameraPermissionDesc')
-        );
+        setCameraError(t('attendance.cameraPermissionDesc'));
         setCameraRunning(false);
       }
     },
@@ -407,7 +439,7 @@ export const MarkYourAttendancePage: React.FC = () => {
           </p>
         </div>
 
-        {/* SUCCESS SCREEN */}
+        {/* SUCCESS SCREEN (Strictly PRESENT) */}
         {successResult ? (
           <div className="rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 p-8 text-center space-y-4">
             <div className="w-16 h-16 rounded-full bg-emerald-600 text-white mx-auto flex items-center justify-center">
@@ -420,10 +452,15 @@ export const MarkYourAttendancePage: React.FC = () => {
               <p className="mt-1.5 text-base font-semibold text-stone-900 dark:text-stone-100">
                 {profile?.name} · <span className="font-mono">{profile?.memberId}</span>
               </p>
+              {successResult.subjectName && (
+                <p className="mt-1 text-sm font-medium text-emerald-800 dark:text-emerald-300">
+                  {successResult.subjectName}
+                </p>
+              )}
             </div>
 
             <div className="flex items-center justify-center gap-4 text-sm text-emerald-900/80 dark:text-emerald-300 tabular-nums pt-2">
-              <span>{t(`common.${successResult.status || 'present'}`)}</span>
+              <span className="font-semibold uppercase">{t('common.present')}</span>
               <span>·</span>
               <span>{successResult.timeStr}</span>
               {successResult.distanceMeters !== undefined && locationRequired && (
@@ -435,30 +472,117 @@ export const MarkYourAttendancePage: React.FC = () => {
                 </>
               )}
             </div>
+
+            {sessions.length > 1 && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSuccessResult(null);
+                    setLiveCode('');
+                  }}
+                  className="rounded-xl border border-emerald-400 dark:border-emerald-700 px-4 py-2 text-xs font-medium text-emerald-900 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                >
+                  {t('mark.markAnotherSession')}
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <>
-            {/* Live Session Status + Step 1 Location Status */}
+            {/* Live Session Discovery Card — explicitly differentiates loading, errors, empty, and active sessions */}
             <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 space-y-4">
               {loadingSession ? (
                 <div className="flex items-center gap-2.5 text-sm text-stone-500">
                   <Loader2 className="w-4 h-4 animate-spin text-[#C25E00]" />
                   <span>{t('mark.findingSession')}</span>
                 </div>
-              ) : session ? (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600/12 dark:bg-emerald-500/20 border border-emerald-600/30 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-700 dark:text-emerald-300 uppercase shrink-0">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse" />
-                      {t('session.liveBadge')}
-                    </span>
-                    <span className="font-semibold text-stone-900 dark:text-stone-100 text-sm truncate">
-                      {session.title || session.ownerName}
+              ) : streamError && sessions.length === 0 ? (
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    {streamError.code === 'network' ? (
+                      <WifiOff className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    )}
+                    <div>
+                      <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                        {streamError.code === 'permission-denied'
+                          ? t('mark.sessionPermErrorTitle')
+                          : streamError.code === 'index-required'
+                          ? t('mark.sessionIndexErrorTitle')
+                          : t('mark.sessionNetworkErrorTitle')}
+                      </p>
+                      <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+                        {streamError.message}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={rechecking}
+                    onClick={refreshActiveSession}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 px-3 py-1.5 text-xs font-medium shrink-0"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${rechecking ? 'animate-spin' : ''}`} />
+                    <span>{t('mark.refreshSession')}</span>
+                  </button>
+                </div>
+              ) : sessions.length > 0 && session ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600/12 dark:bg-emerald-500/20 border border-emerald-600/30 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-700 dark:text-emerald-300 uppercase shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse" />
+                        {t('session.liveBadge')}
+                      </span>
+                      <span className="font-semibold text-stone-900 dark:text-stone-100 text-sm truncate">
+                        {session.subjectName || session.title || session.ownerName}
+                      </span>
+                    </div>
+                    <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
+                      {t('common.memberId')}: {profile?.memberId}
                     </span>
                   </div>
-                  <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
-                    {t('common.memberId')}: {profile?.memberId}
-                  </span>
+
+                  <p className="text-xs text-stone-500 dark:text-stone-400">
+                    {session.teacherName || session.ownerName}
+                    {session.className ? ` · ${session.className}` : ''}
+                    {session.classroom ? ` · ${session.classroom}` : ''}
+                  </p>
+
+                  {/* If multiple teachers have active sessions concurrently, let student pick */}
+                  {sessions.length > 1 && (
+                    <div className="pt-2 border-t border-stone-100 dark:border-stone-800 space-y-2">
+                      <p className="text-xs font-medium text-stone-600 dark:text-stone-300">
+                        {t('mark.multipleLiveSessions')} ({formatNumber(sessions.length)})
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {sessions.map((s) => {
+                          const isSelected = s.id === session.id;
+                          return (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => setSelectedSessionId(s.id)}
+                              className={`rounded-xl border px-3 py-2 text-left text-xs transition-colors ${
+                                isSelected
+                                  ? 'border-[#C25E00] bg-amber-50/70 dark:bg-amber-950/30 text-stone-900 dark:text-stone-100'
+                                  : 'border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800/50'
+                              }`}
+                            >
+                              <p className="font-semibold truncate">
+                                {s.subjectName || s.title}
+                              </p>
+                              <p className="text-[11px] text-stone-500 truncate mt-0.5">
+                                {s.teacherName || s.ownerName}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-start justify-between gap-3">
@@ -472,10 +596,11 @@ export const MarkYourAttendancePage: React.FC = () => {
                   </div>
                   <button
                     type="button"
+                    disabled={rechecking}
                     onClick={refreshActiveSession}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 px-3 py-1.5 text-xs font-medium shrink-0"
                   >
-                    <RefreshCw className="w-3.5 h-3.5" />
+                    <RefreshCw className={`w-3.5 h-3.5 ${rechecking ? 'animate-spin' : ''}`} />
                     <span>{t('mark.refreshSession')}</span>
                   </button>
                 </div>
@@ -588,7 +713,6 @@ export const MarkYourAttendancePage: React.FC = () => {
                   <div className="relative overflow-hidden rounded-xl bg-stone-950 min-h-[290px] sm:min-h-[320px] flex items-center justify-center">
                     <div id="mark-qr-reader" className="w-full" />
 
-                    {/* Clean Corner-Bracket Scanning Frame Overlay */}
                     {cameraRunning && (
                       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
                         <div className="relative w-52 h-52 sm:w-56 sm:h-56">
