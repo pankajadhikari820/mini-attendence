@@ -11,17 +11,16 @@ A multi-organization, QR-based attendance platform built with React, TypeScript,
 - **Live Rotating QR Sessions (Primary Attendance Mode)**:
   - Admins start sessions for Managers; Managers start sessions for their own Members.
   - Setup includes optional title, duration (`15 / 30 / 60 / 120` min), allowed radius (`20 – 500` m, default `50` m), and high-accuracy GPS plotted on an interactive **Leaflet + OpenStreetMap** map (no API key needed) with a draggable pin and radius circle.
-  - **Projector Mode**: Full-screen view with Screen Wake Lock API, large QR rotating every **10 seconds** (`{ "s": sessionId, "t": token }`) with a countdown ring, synchronized **6-digit live code**, live `"Marked: X / Y"` counter, real-time marked feed, real-time `"Rejected attempts"` list, `"Extend 10 min"`, and `"Close session"`.
-- **Self-Marking Page (`/mark`)**:
+  - **Projector Mode**: Full-screen view with Screen Wake Lock API, visible **LIVE** status indicator, large QR rotating every **10 seconds** (`{ "s": sessionId, "t": token }` with 128-bit crypto tokens) with a circular countdown ring and 10s timer, synchronized **6-digit live code**, live `"Marked: X / Y"` counter, real-time marked feed, real-time `"Rejected attempts"` list, `"Extend 10 min"`, and `"Stop session"` (immediately invalidates the active token).
+- **Self-Marking & QR Scanner (`/mark`)**:
+  - Real-time subscription to the direct parent's active LIVE session (Manager scans Admin's session; Member scans their Manager's session).
   - Automatic GPS verification (`"You are 12 m from the class ✓"` / `"You are 340 m away ✗"`), rejecting readings with accuracy > 100 m.
-  - Two tabs: **Scan QR** (live rotating QR camera scanner) and **Enter ID** (6-char own ID + 6-digit live code).
-  - Automatically marks **Late** after the organization's `lateAfter` cut-off time.
-- **Zero-Cloud-Functions Security (`firestore.rules`)**:
-  - Rotating secrets stored in `sessionSecrets/{sessionId}` (readable/writable only by the session starter, verified server-side by Firestore Security Rules).
-  - Current token/code valid max 15 seconds; previous token/code valid 5 seconds after rotation for network delay.
-  - Server-side flat-earth radius check (`cosLat`, `math.sqrt`, `math.pow`) enforced in `firestore.rules`.
-  - Atomic one-device-per-session lock via `sessionDevices/{sessionId}_{deviceId}` written in the same `writeBatch` as the attendance record.
-  - Failed attempts logged to `attempts/{id}` and shown live on the session screen.
+  - Dedicated camera **QR Scanner** with scanning frame overlay (mobile back/front camera + desktop webcam fallback) and **Enter ID** (6-char own ID + 6-digit live code) tab.
+  - Uses a **Firestore Transaction (`runTransaction`)** to atomically check session status, prevent duplicate attendance per user, and record attendance with zero race conditions.
+- **Server-Side Security (`firestore.rules` — No Cloud Functions Required)**:
+  - Rotating secrets stored in `sessionSecrets/{sessionId}` (strictly readable/writable only by the session starter, verified server-side by Firestore Security Rules).
+  - **Strict 10-second backend TTL**: Only the currently active token/code is accepted (`request.time <= secret.tokenUpdatedAt + duration.value(10, 's')` and `secret.active == true`). Previous tokens and ended sessions are immediately rejected by Firestore on the server.
+  - Server-side role & organization checks (`orgId`, direct parent-child hierarchy), flat-earth radius check (`cosLat`, `math.sqrt`, `math.pow`), atomic one-device-per-session lock (`sessionDevices/{sessionId}_{deviceId}`), and `attempts/{id}` logging.
 - **Manual / ID-Card Backup (`/attendance/manual`)**:
   - Personal ID card QR encodes `{ orgId, uid, id }`.
   - Records marked manually or via backup ID-card scan are tagged `"manual"` and highlighted in yellow in Reports (both on-screen and in PDF exports).

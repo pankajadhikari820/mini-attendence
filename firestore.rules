@@ -54,17 +54,22 @@ service cloud.firestore {
     }
 
     function liveSecretValid(secret, data) {
-      let withinCurrent = request.time <= secret.tokenUpdatedAt + duration.value(15, 's');
-      let withinPrev = request.time <= secret.tokenUpdatedAt + duration.value(5, 's');
-      return (
-        (data.method == 'live_qr' && 'submittedToken' in data && (
-          (data.submittedToken == secret.token && withinCurrent) ||
-          (secret.prevToken != '' && data.submittedToken == secret.prevToken && withinPrev)
-        )) ||
-        (data.method == 'live_code' && 'submittedCode' in data && (
-          (data.submittedCode == secret.code && withinCurrent) ||
-          (secret.prevCode != '' && data.submittedCode == secret.prevCode && withinPrev)
-        ))
+      let within10s = secret.active == true
+        && secret.tokenUpdatedAt is timestamp
+        && request.time >= secret.tokenUpdatedAt
+        && request.time <= secret.tokenUpdatedAt + duration.value(10, 's');
+      return within10s && (
+        (data.method == 'live_qr'
+          && 'submittedToken' in data
+          && secret.token is string
+          && secret.token.size() >= 32
+          && data.submittedToken == secret.token)
+        ||
+        (data.method == 'live_code'
+          && 'submittedCode' in data
+          && secret.code is string
+          && secret.code.size() == 6
+          && data.submittedCode == secret.code)
       );
     }
 
@@ -182,14 +187,20 @@ service cloud.firestore {
       );
     }
 
-    // Session Secrets: STRICTLY owner-only. Members/children can NEVER read or write.
+    // Session Secrets: STRICTLY owner-only. Members/scanners can NEVER read or write.
     match /sessionSecrets/{sessionId} {
       allow read: if isActive() && resource.data.ownerUid == request.auth.uid;
       allow create: if isActive()
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.orgId == myUser().orgId
-        && myUser().role in ['admin', 'manager'];
-      allow update, delete: if isActive() && resource.data.ownerUid == request.auth.uid;
+        && myUser().role in ['admin', 'manager']
+        && request.resource.data.tokenUpdatedAt == request.time;
+      allow update: if isActive()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.tokenUpdatedAt == request.time;
+      allow delete: if isActive() && resource.data.ownerUid == request.auth.uid;
     }
 
     // One device = one person per session (write-once per sessionId_deviceId)
@@ -226,11 +237,15 @@ service cloud.firestore {
       return request.resource.data.method in ['live_qr', 'live_code']
         && request.resource.data.personUid == request.auth.uid
         && recordId == request.resource.data.orgId + '_' + request.resource.data.date + '_' + request.auth.uid
+        && !exists(/databases/$(database)/documents/attendance/$(recordId))
         && request.resource.data.timestamp == request.time
         && sid is string
         && request.resource.data.deviceId is string
         && exists(/databases/$(database)/documents/sessions/$(sid))
         && exists(/databases/$(database)/documents/sessionSecrets/$(sid))
+        && sess.orgId == request.resource.data.orgId
+        && secret.orgId == sess.orgId
+        && secret.ownerUid == sess.ownerUid
         && sess.status == 'open'
         && request.time <= sess.endsAt
         && isDirectChildOfSession(sess)

@@ -110,10 +110,12 @@ export interface AttendanceSession {
 export interface SessionSecret {
   ownerUid: string;
   orgId: string;
+  active: boolean;
   token: string;
-  prevToken: string;
+  prevToken?: string;
   code: string;
-  prevCode: string;
+  prevCode?: string;
+  rotationSeq?: number;
   tokenUpdatedAt?: Timestamp | null;
 }
 

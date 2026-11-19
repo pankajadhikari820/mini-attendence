@@ -196,11 +196,11 @@ export const ManagerDashboard: React.FC = () => {
             </button>
 
             <Link
-              to="/mark"
+              to="/mark?tab=scan"
               className="inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] hover:bg-stone-50 dark:hover:bg-stone-800 px-3.5 py-2.5 text-sm font-medium transition-colors whitespace-nowrap"
             >
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <span>{t('nav.markYourAttendance')}</span>
+              <span>{t('mark.qrScannerBtn')}</span>
             </Link>
 
             <Link

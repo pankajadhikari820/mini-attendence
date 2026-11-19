@@ -66,6 +66,7 @@ export const StartAttendancePage: React.FC = () => {
   const [currentToken, setCurrentToken] = useState('');
   const [currentCode, setCurrentCode] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(ROTATION_SECONDS);
+  const [rotating, setRotating] = useState(false);
   const [sessionRemainingSec, setSessionRemainingSec] = useState(0);
   const [markedRecords, setMarkedRecords] = useState<AttendanceRecord[]>([]);
   const [attempts, setAttempts] = useState<AttendanceAttempt[]>([]);
@@ -73,8 +74,9 @@ export const StartAttendancePage: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [wakeLockOn, setWakeLockOn] = useState(false);
 
-  const tokenRef = useRef('');
-  const codeRef = useRef('');
+  const tokenIssuedAtMsRef = useRef<number>(Date.now());
+  const endsAtMsRef = useRef<number>(0);
+  const isRotatingRef = useRef<boolean>(false);
   const projectorRef = useRef<HTMLDivElement | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
 
@@ -121,18 +123,17 @@ export const StartAttendancePage: React.FC = () => {
         setTotalExpected(people.filter((p) => p.status === 'active').length);
 
         if (existing) {
-          // Immediately rotate token so our client has the live secret in memory
-          const fresh = await rotateSessionSecret({
-            sessionId: existing.id,
-            prevToken: '',
-            prevCode: '',
-          });
+          // Immediately rotate token so our client has a fresh 10-second live secret
+          const fresh = await rotateSessionSecret({ sessionId: existing.id });
           if (!mounted) return;
-          tokenRef.current = fresh.token;
-          codeRef.current = fresh.code;
+          tokenIssuedAtMsRef.current = Date.now();
+          endsAtMsRef.current = existing.endsAt?.toMillis?.() ?? 0;
           setCurrentToken(fresh.token);
           setCurrentCode(fresh.code);
           setSecondsLeft(ROTATION_SECONDS);
+          setSessionRemainingSec(
+            Math.max(0, Math.floor((endsAtMsRef.current - Date.now()) / 1000))
+          );
           setActiveSession(existing);
         } else {
           refreshGPS();
@@ -150,16 +151,20 @@ export const StartAttendancePage: React.FC = () => {
 
   // Subscribe to session doc, attendance list, and rejected attempts while active
   useEffect(() => {
-    if (!activeSession || !org) return;
-    const unsubSess = subscribeSession(activeSession.id, (s) => {
+    if (!activeSession?.id || !org) return;
+    const sessionId = activeSession.id;
+    const unsubSess = subscribeSession(sessionId, (s) => {
       if (!s || s.status === 'closed') {
+        setCurrentToken('');
+        setCurrentCode('');
         setActiveSession(null);
       } else {
+        endsAtMsRef.current = s.endsAt?.toMillis?.() ?? endsAtMsRef.current;
         setActiveSession(s);
       }
     });
-    const unsubAtt = subscribeSessionAttendance(org.id, activeSession.id, setMarkedRecords);
-    const unsubAttempts = subscribeSessionAttempts(org.id, activeSession.id, setAttempts);
+    const unsubAtt = subscribeSessionAttendance(org.id, sessionId, setMarkedRecords);
+    const unsubAttempts = subscribeSessionAttempts(org.id, sessionId, setAttempts);
 
     return () => {
       unsubSess();
@@ -205,23 +210,29 @@ export const StartAttendancePage: React.FC = () => {
     };
   }, [activeSession?.id]);
 
-  // 10-second QR & 6-digit code rotation timer + session countdown
+  // Wall-clock synchronized 10-second QR & 6-digit code rotation timer + session countdown
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeSession?.id) return;
+    const sessionId = activeSession.id;
+    let aborted = false;
+    isRotatingRef.current = false;
 
-    let tick = ROTATION_SECONDS;
-    setSecondsLeft(ROTATION_SECONDS);
+    const tickLoop = async () => {
+      if (aborted) return;
 
-    const interval = window.setInterval(async () => {
-      // Update remaining session duration
-      const endMs = activeSession.endsAt?.toMillis?.() ?? 0;
-      const rem = Math.max(0, Math.floor((endMs - Date.now()) / 1000));
+      const now = Date.now();
+      const endMs = endsAtMsRef.current;
+      const rem = endMs > 0 ? Math.max(0, Math.floor((endMs - now) / 1000)) : 0;
       setSessionRemainingSec(rem);
 
+      // Automatically stop session when duration reaches 0
       if (endMs > 0 && rem <= 0) {
+        aborted = true;
         window.clearInterval(interval);
+        setCurrentToken('');
+        setCurrentCode('');
         try {
-          await closeAttendanceSession(activeSession.id);
+          await closeAttendanceSession(sessionId);
         } catch {
           // Ignore
         }
@@ -229,30 +240,37 @@ export const StartAttendancePage: React.FC = () => {
         return;
       }
 
-      tick -= 1;
-      if (tick <= 0) {
-        tick = ROTATION_SECONDS;
-        setSecondsLeft(ROTATION_SECONDS);
+      const elapsedSec = (now - tokenIssuedAtMsRef.current) / 1000;
+      const left = Math.max(0, Math.ceil(ROTATION_SECONDS - elapsedSec));
+      setSecondsLeft(left);
+
+      // Rotate slightly ahead of the strict 10-second backend cutoff so the live QR never goes stale
+      if (elapsedSec >= 9.6 && !isRotatingRef.current) {
+        isRotatingRef.current = true;
+        setRotating(true);
         try {
-          const next = await rotateSessionSecret({
-            sessionId: activeSession.id,
-            prevToken: tokenRef.current,
-            prevCode: codeRef.current,
-          });
-          tokenRef.current = next.token;
-          codeRef.current = next.code;
+          const next = await rotateSessionSecret({ sessionId });
+          if (aborted) return;
+          tokenIssuedAtMsRef.current = Date.now();
           setCurrentToken(next.token);
           setCurrentCode(next.code);
+          setSecondsLeft(ROTATION_SECONDS);
         } catch {
-          // Will retry on next cycle
+          // Will retry on next tick if transient network hiccup
+        } finally {
+          isRotatingRef.current = false;
+          if (!aborted) setRotating(false);
         }
-      } else {
-        setSecondsLeft(tick);
       }
-    }, 1000);
+    };
 
-    return () => window.clearInterval(interval);
-  }, [activeSession?.id, activeSession?.endsAt]);
+    const interval = window.setInterval(tickLoop, 250);
+    return () => {
+      aborted = true;
+      isRotatingRef.current = false;
+      window.clearInterval(interval);
+    };
+  }, [activeSession?.id]);
 
   // Fullscreen listener
   useEffect(() => {
@@ -287,8 +305,8 @@ export const StartAttendancePage: React.FC = () => {
         lng,
         radius,
       });
-      tokenRef.current = token;
-      codeRef.current = code;
+      tokenIssuedAtMsRef.current = Date.now();
+      endsAtMsRef.current = session.endsAt?.toMillis?.() ?? Date.now() + duration * 60 * 1000;
       setCurrentToken(token);
       setCurrentCode(code);
       setSecondsLeft(ROTATION_SECONDS);
@@ -305,6 +323,7 @@ export const StartAttendancePage: React.FC = () => {
     if (!activeSession) return;
     try {
       const nextEnds = await extendAttendanceSession(activeSession.id, activeSession.endsAt, 10);
+      endsAtMsRef.current = nextEnds.toMillis();
       setActiveSession((prev) => (prev ? { ...prev, endsAt: nextEnds } : prev));
       showToast(t('session.extendedToast'), 'success');
     } catch (err) {
@@ -314,12 +333,16 @@ export const StartAttendancePage: React.FC = () => {
 
   const handleClose = async () => {
     if (!activeSession) return;
+    const sessionId = activeSession.id;
+    // Immediately clear in-memory QR and stop token generation UI
+    setCurrentToken('');
+    setCurrentCode('');
+    setActiveSession(null);
     try {
       if (document.fullscreenElement) {
         await document.exitFullscreen().catch(() => {});
       }
-      await closeAttendanceSession(activeSession.id);
-      setActiveSession(null);
+      await closeAttendanceSession(sessionId);
       showToast(t('session.closedToast'), 'info');
     } catch (err) {
       showToast(t(getFirebaseErrorKey(err)), 'error');
@@ -360,13 +383,26 @@ export const StartAttendancePage: React.FC = () => {
               : ''
           } space-y-6`}
         >
-          {/* Top Bar */}
+          {/* Top Bar with LIVE Status & Session Details */}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="text-2xl font-bold tracking-tight text-stone-900 dark:text-stone-50">
-                {activeSession.title || t('session.startTitle')}
-              </h2>
-              <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 flex flex-wrap items-center gap-2 tabular-nums">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-2 rounded-lg bg-emerald-600/12 dark:bg-emerald-500/20 border border-emerald-600/30 dark:border-emerald-500/40 px-2.5 py-1 text-xs font-bold tracking-wider text-emerald-700 dark:text-emerald-300 uppercase">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600 dark:bg-emerald-400" />
+                  </span>
+                  {t('session.liveBadge')}
+                </span>
+                <h2 className="text-2xl font-bold tracking-tight text-stone-900 dark:text-stone-50">
+                  {activeSession.title || t('session.startTitle')}
+                </h2>
+              </div>
+              <p className="mt-1.5 text-xs text-stone-500 dark:text-stone-400 flex flex-wrap items-center gap-2 tabular-nums">
+                <span className="font-mono">
+                  {t('session.sessionIdLabel')}: {activeSession.id.slice(0, 6).toUpperCase()}
+                </span>
+                <span>·</span>
                 <span>{targetRoleLabel}</span>
                 <span>·</span>
                 <span>
@@ -466,13 +502,19 @@ export const StartAttendancePage: React.FC = () => {
                 </div>
               </div>
 
-              <p className="mt-4 text-xs text-stone-500 dark:text-stone-400 tabular-nums">
-                {t('session.rotatesIn')}{' '}
-                <strong className="text-stone-900 dark:text-stone-100">
+              <div className="mt-5 flex items-center justify-center gap-3 text-sm text-stone-600 dark:text-stone-300 tabular-nums">
+                <span>{rotating ? t('session.rotatingToken') : t('session.rotatesIn')}</span>
+                <span
+                  className={`font-mono text-xl font-bold px-2.5 py-0.5 rounded-lg border ${
+                    secondsLeft <= 3
+                      ? 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300'
+                      : 'border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 text-stone-900 dark:text-stone-50'
+                  }`}
+                >
                   {secondsLeft}
                   {t('session.seconds')}
-                </strong>
-              </p>
+                </span>
+              </div>
 
               {/* 6-digit Live Code */}
               <div className="mt-6 w-full max-w-sm rounded-2xl border border-stone-200 dark:border-stone-800 bg-[#FAF9F6] dark:bg-stone-900/70 px-6 py-5">

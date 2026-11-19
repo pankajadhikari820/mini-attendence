@@ -7,15 +7,19 @@ import {
   CameraOff,
   CheckCircle2,
   Crosshair,
+  Loader2,
   MapPin,
   RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
+import { useToast } from '../context/ToastContext';
 import type { AttendanceSession, LiveSessionQRPayload } from '../types';
 import {
   findActiveParentSession,
+  resolveScannedSession,
   submitSelfAttendance,
+  subscribeActiveParentSession,
   type SelfMarkResult,
 } from '../services/sessionService';
 import {
@@ -29,12 +33,13 @@ import { Layout } from '../components/Layout';
 export const MarkYourAttendancePage: React.FC = () => {
   const { profile, org } = useAuth();
   const { t, formatNumber } = useTranslation();
+  const { showToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const initialTab = searchParams.get('tab') === 'code' ? 'code' : 'scan';
   const [tab, setTab] = useState<'scan' | 'code'>(initialTab);
 
-  // Active parent session state
+  // Active parent session state (real-time synced)
   const [loadingSession, setLoadingSession] = useState(true);
   const [session, setSession] = useState<AttendanceSession | null>(null);
 
@@ -59,8 +64,8 @@ export const MarkYourAttendancePage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [successResult, setSuccessResult] = useState<SelfMarkResult | null>(null);
 
-  // Find active parent session
-  const loadActiveSession = useCallback(async () => {
+  // Manual refresh fallback
+  const refreshActiveSession = useCallback(async () => {
     if (!profile || !org) return;
     setLoadingSession(true);
     setErrorMessage('');
@@ -73,6 +78,39 @@ export const MarkYourAttendancePage: React.FC = () => {
       setLoadingSession(false);
     }
   }, [profile, org]);
+
+  // Real-time subscription to parent's LIVE session
+  useEffect(() => {
+    if (!profile || !org) return;
+    setLoadingSession(true);
+    const unsub = subscribeActiveParentSession(
+      profile,
+      org,
+      (active) => {
+        setSession(active);
+        setLoadingSession(false);
+      },
+      () => {
+        setLoadingSession(false);
+      }
+    );
+    return () => unsub();
+  }, [profile, org]);
+
+  // Auto-expire locally if session's endsAt passes while screen is open
+  useEffect(() => {
+    if (!session?.endsAt) return;
+    const endMs = session.endsAt.toMillis();
+    const delay = endMs - Date.now();
+    if (delay <= 0) {
+      setSession(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setSession(null);
+    }, delay + 500);
+    return () => window.clearTimeout(timer);
+  }, [session?.id, session?.endsAt]);
 
   // Step 1: Automatically read high-accuracy GPS
   const readGpsLocation = useCallback(async () => {
@@ -93,9 +131,8 @@ export const MarkYourAttendancePage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadActiveSession();
     readGpsLocation();
-  }, [loadActiveSession, readGpsLocation]);
+  }, [readGpsLocation]);
 
   // Computed distance to active session
   const distanceMeters = useMemo(() => {
@@ -125,31 +162,65 @@ export const MarkYourAttendancePage: React.FC = () => {
         if (inst.isScanning) await inst.stop();
         inst.clear();
       } catch {
-        // Ignore
+        // Ignore stop cleanup errors
       }
     }
     setCameraRunning(false);
   }, []);
 
+  const reportError = useCallback(
+    (msg: string) => {
+      playBeep(false);
+      triggerVibration(false);
+      setErrorMessage(msg);
+      showToast(msg, 'error');
+    },
+    [showToast]
+  );
+
   const handleSubmitTokenOrCode = useCallback(
     async (mode: 'live_qr' | 'live_code', value: string, scannedSessionId?: string) => {
-      if (!org || !profile || !session) return;
+      if (!org || !profile) return;
       setErrorMessage('');
 
-      if (scannedSessionId && scannedSessionId !== session.id) {
-        playBeep(false);
-        triggerVibration(false);
-        setErrorMessage(t('mark.errWrongSession'));
+      // Determine target session: use active session if matching, otherwise resolve scanned sessionId from Firestore
+      let targetSession: AttendanceSession | null = session;
+
+      if (mode === 'live_qr' && scannedSessionId) {
+        if (!targetSession || targetSession.id !== scannedSessionId) {
+          setSubmitting(true);
+          const resolved = await resolveScannedSession(scannedSessionId, profile, org);
+          if (resolved.status !== 'ok') {
+            setSubmitting(false);
+            if (resolved.status === 'closed') {
+              reportError(t('mark.errSessionClosed'));
+            } else if (resolved.status === 'unauthorized') {
+              reportError(t('mark.errUnauthorized'));
+            } else if (resolved.status === 'network') {
+              reportError(t('mark.errNetwork'));
+            } else {
+              reportError(t('attendance.invalidQr'));
+            }
+            return;
+          }
+          targetSession = resolved.session;
+          setSession(resolved.session);
+        }
+      }
+
+      if (!targetSession) {
+        reportError(t('mark.errSessionClosed'));
         return;
       }
 
-      if (locationRequired) {
+      const needsGps = targetSession.locationCheckEnabled;
+      if (needsGps) {
         if (!gps) {
-          setErrorMessage(t('mark.locationDenied'));
+          reportError(t('mark.locationDenied'));
           return;
         }
         if (gps.accuracy > 100) {
-          setErrorMessage(t('mark.lowAccuracy'));
+          reportError(t('mark.lowAccuracy'));
           return;
         }
       }
@@ -159,7 +230,7 @@ export const MarkYourAttendancePage: React.FC = () => {
         const res = await submitSelfAttendance({
           org,
           profile,
-          session,
+          session: targetSession,
           method: mode,
           token: mode === 'live_qr' ? value : undefined,
           code: mode === 'live_code' ? value : undefined,
@@ -173,17 +244,16 @@ export const MarkYourAttendancePage: React.FC = () => {
           triggerVibration(true);
           await stopCamera();
           setSuccessResult(res);
+          showToast(t('mark.successTitle'), 'success');
         } else {
-          playBeep(false);
-          triggerVibration(false);
           const key = res.errorCode === 'generic' ? 'errors.generic' : `mark.${res.errorCode}`;
-          setErrorMessage(t(key));
+          reportError(t(key));
         }
       } finally {
         setSubmitting(false);
       }
     },
-    [org, profile, session, locationRequired, gps, stopCamera, t]
+    [org, profile, session, gps, stopCamera, showToast, reportError, t]
   );
 
   const handleDecodedLiveQR = useCallback(
@@ -192,13 +262,27 @@ export const MarkYourAttendancePage: React.FC = () => {
       let parsed: LiveSessionQRPayload;
       try {
         const obj = JSON.parse(raw);
-        if (!obj || typeof obj.s !== 'string' || typeof obj.t !== 'string') {
-          setErrorMessage(t('attendance.invalidQr'));
+        if (
+          !obj ||
+          typeof obj.s !== 'string' ||
+          obj.s.trim().length < 4 ||
+          typeof obj.t !== 'string' ||
+          obj.t.trim().length < 16
+        ) {
+          scanBusyRef.current = true;
+          reportError(t('attendance.invalidQr'));
+          window.setTimeout(() => {
+            scanBusyRef.current = false;
+          }, 1500);
           return;
         }
-        parsed = obj as LiveSessionQRPayload;
+        parsed = { s: obj.s.trim(), t: obj.t.trim() };
       } catch {
-        setErrorMessage(t('attendance.invalidQr'));
+        scanBusyRef.current = true;
+        reportError(t('attendance.invalidQr'));
+        window.setTimeout(() => {
+          scanBusyRef.current = false;
+        }, 1500);
         return;
       }
 
@@ -208,7 +292,7 @@ export const MarkYourAttendancePage: React.FC = () => {
         scanBusyRef.current = false;
       }, 1500);
     },
-    [handleSubmitTokenOrCode, t]
+    [handleSubmitTokenOrCode, reportError, t]
   );
 
   const startCamera = useCallback(
@@ -221,20 +305,46 @@ export const MarkYourAttendancePage: React.FC = () => {
         return;
       }
 
+      const scannerConfig = {
+        fps: 12,
+        qrbox: { width: 220, height: 220 },
+        aspectRatio: 1,
+      };
+
+      const onScanSuccess = (text: string) => {
+        handleDecodedLiveQR(text);
+      };
+
       try {
         const scanner = new Html5Qrcode('mark-qr-reader');
         scannerRef.current = scanner;
-        await scanner.start(
-          { facingMode: mode },
-          { fps: 10, qrbox: { width: 230, height: 230 }, aspectRatio: 1 },
-          (text) => {
-            handleDecodedLiveQR(text);
-          },
-          () => {}
-        );
+        await scanner.start({ facingMode: mode }, scannerConfig, onScanSuccess, () => {});
         setCameraRunning(true);
-      } catch {
-        setCameraError(t('attendance.cameraPermissionDesc'));
+      } catch (firstErr) {
+        // Desktop webcams sometimes reject facingMode: 'environment'; fallback to first detected camera
+        try {
+          const cameras = await Html5Qrcode.getCameras();
+          if (cameras && cameras.length > 0) {
+            const scanner = new Html5Qrcode('mark-qr-reader');
+            scannerRef.current = scanner;
+            const preferred =
+              mode === 'environment'
+                ? cameras.find((c) => /back|rear|environment/i.test(c.label)) || cameras[0]
+                : cameras.find((c) => /front|user|face/i.test(c.label)) || cameras[0];
+            await scanner.start(preferred.id, scannerConfig, onScanSuccess, () => {});
+            setCameraRunning(true);
+            return;
+          }
+        } catch {
+          // Fall through to permission error message
+        }
+
+        const msg = (firstErr as Error)?.message || '';
+        setCameraError(
+          msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('notallowed')
+            ? t('attendance.cameraPermissionDesc')
+            : t('attendance.cameraPermissionDesc')
+        );
         setCameraRunning(false);
       }
     },
@@ -266,13 +376,13 @@ export const MarkYourAttendancePage: React.FC = () => {
     const cleanId = enteredId.trim().toUpperCase();
     const myId = (profile?.memberId || '').trim().toUpperCase();
     if (!cleanId || cleanId !== myId) {
-      setErrorMessage(t('mark.idMismatch'));
+      reportError(t('mark.idMismatch'));
       return;
     }
 
     const cleanCode = liveCode.replace(/\s+/g, '');
     if (!/^\d{6}$/.test(cleanCode)) {
-      setErrorMessage(t('mark.errInvalidCode'));
+      reportError(t('mark.errInvalidCode'));
       return;
     }
 
@@ -326,39 +436,50 @@ export const MarkYourAttendancePage: React.FC = () => {
               )}
             </div>
           </div>
-        ) : loadingSession ? (
-          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-8 text-center text-sm text-stone-500">
-            {t('mark.findingSession')}
-          </div>
-        ) : !session ? (
-          <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-8 text-center space-y-3">
-            <h3 className="text-lg font-semibold text-stone-900 dark:text-stone-100">
-              {t('mark.noActiveSession')}
-            </h3>
-            <p className="text-sm text-stone-500 dark:text-stone-400">
-              {t('mark.noActiveSessionHint')}
-            </p>
-            <button
-              type="button"
-              onClick={loadActiveSession}
-              className="mt-2 inline-flex items-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-5 py-2.5 text-sm font-medium"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>{t('mark.refreshSession')}</span>
-            </button>
-          </div>
         ) : (
           <>
-            {/* Active Session Header + Step 1 Location Status */}
+            {/* Live Session Status + Step 1 Location Status */}
             <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 space-y-4">
-              <div className="flex items-center justify-between gap-2 text-xs text-stone-500 dark:text-stone-400">
-                <span className="font-medium text-stone-900 dark:text-stone-100 text-sm">
-                  {session.title || session.ownerName}
-                </span>
-                <span className="font-mono">
-                  {t('common.memberId')}: {profile?.memberId}
-                </span>
-              </div>
+              {loadingSession ? (
+                <div className="flex items-center gap-2.5 text-sm text-stone-500">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#C25E00]" />
+                  <span>{t('mark.findingSession')}</span>
+                </div>
+              ) : session ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600/12 dark:bg-emerald-500/20 border border-emerald-600/30 px-2 py-0.5 text-[11px] font-bold tracking-wider text-emerald-700 dark:text-emerald-300 uppercase shrink-0">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse" />
+                      {t('session.liveBadge')}
+                    </span>
+                    <span className="font-semibold text-stone-900 dark:text-stone-100 text-sm truncate">
+                      {session.title || session.ownerName}
+                    </span>
+                  </div>
+                  <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
+                    {t('common.memberId')}: {profile?.memberId}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                      {t('mark.noActiveSession')}
+                    </p>
+                    <p className="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+                      {t('mark.noActiveSessionHint')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={refreshActiveSession}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 px-3 py-1.5 text-xs font-medium shrink-0"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>{t('mark.refreshSession')}</span>
+                  </button>
+                </div>
+              )}
 
               {/* Step 1: GPS Distance Banner */}
               {!locationRequired ? (
@@ -396,7 +517,7 @@ export const MarkYourAttendancePage: React.FC = () => {
                     {t('mark.retryGps')}
                   </button>
                 </div>
-              ) : (
+              ) : session ? (
                 <div
                   className={`rounded-xl border px-4 py-3 flex items-center justify-between gap-3 ${
                     locationOk
@@ -422,7 +543,7 @@ export const MarkYourAttendancePage: React.FC = () => {
                     <RefreshCw className="w-4 h-4" />
                   </button>
                 </div>
-              )}
+              ) : null}
             </section>
 
             {/* Step 2: Two Tabs (Scan QR | Enter ID) */}
@@ -464,8 +585,24 @@ export const MarkYourAttendancePage: React.FC = () => {
 
               {tab === 'scan' ? (
                 <div className="space-y-4">
-                  <div className="relative overflow-hidden rounded-xl bg-stone-950 min-h-[280px] flex items-center justify-center">
+                  <div className="relative overflow-hidden rounded-xl bg-stone-950 min-h-[290px] sm:min-h-[320px] flex items-center justify-center">
                     <div id="mark-qr-reader" className="w-full" />
+
+                    {/* Clean Corner-Bracket Scanning Frame Overlay */}
+                    {cameraRunning && (
+                      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                        <div className="relative w-52 h-52 sm:w-56 sm:h-56">
+                          <span className="absolute top-0 left-0 w-7 h-7 border-t-[3px] border-l-[3px] border-[#C25E00] rounded-tl-lg" />
+                          <span className="absolute top-0 right-0 w-7 h-7 border-t-[3px] border-r-[3px] border-[#C25E00] rounded-tr-lg" />
+                          <span className="absolute bottom-0 left-0 w-7 h-7 border-b-[3px] border-l-[3px] border-[#C25E00] rounded-bl-lg" />
+                          <span className="absolute bottom-0 right-0 w-7 h-7 border-b-[3px] border-r-[3px] border-[#C25E00] rounded-br-lg" />
+                        </div>
+                        <p className="mt-4 px-3 py-1 rounded-lg bg-black/60 text-white text-xs font-medium">
+                          {submitting ? t('mark.submitting') : t('mark.scanFrameHint')}
+                        </p>
+                      </div>
+                    )}
+
                     {!cameraRunning && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-stone-100 dark:bg-stone-900">
                         <Camera className="w-9 h-9 text-stone-400 mb-3" />
@@ -484,12 +621,19 @@ export const MarkYourAttendancePage: React.FC = () => {
                     )}
                   </div>
 
+                  {cameraError && !cameraRunning && (
+                    <div className="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-3.5 text-xs text-amber-900 dark:text-amber-200">
+                      <p className="font-semibold">{t('attendance.cameraPermissionTitle')}</p>
+                      <p className="mt-1">{t('attendance.cameraPermissionDesc')}</p>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-3">
                     {cameraRunning ? (
                       <button
                         type="button"
                         onClick={stopCamera}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium"
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800"
                       >
                         <CameraOff className="w-4 h-4" />
                         <span>{t('attendance.stopCamera')}</span>
@@ -498,7 +642,7 @@ export const MarkYourAttendancePage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => startCamera(facingMode)}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] text-white py-3 text-sm font-medium"
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white py-3 text-sm font-medium"
                       >
                         <Camera className="w-4 h-4" />
                         <span>{t('attendance.startCamera')}</span>
@@ -508,7 +652,7 @@ export const MarkYourAttendancePage: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleSwitchCamera}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium"
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800"
                     >
                       <RefreshCw className="w-4 h-4" />
                       <span>{t('attendance.switchCamera')}</span>
@@ -550,7 +694,7 @@ export const MarkYourAttendancePage: React.FC = () => {
 
                   <button
                     type="submit"
-                    disabled={submitting}
+                    disabled={submitting || !session}
                     className="w-full rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white py-3 text-sm font-medium transition-colors"
                   >
                     {submitting ? t('mark.submitting') : t('mark.submitBtn')}
