@@ -252,7 +252,7 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label={t('common.close')}
-            className="text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 p-1"
+            className="inline-flex items-center justify-center w-10 h-10 -mr-1.5 rounded-lg text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -260,7 +260,7 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
 
         {/* Official Digital Student ID Card Preview */}
         <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-[#FAF9F6] dark:bg-stone-950 overflow-hidden">
-          <div className="bg-[#C25E00] px-5 py-4 text-white flex items-center gap-3">
+          <div className="bg-[#C25E00] px-4 sm:px-5 py-4 text-white flex items-center gap-3">
             {org.logoUrl && (
               <img
                 src={org.logoUrl}
@@ -276,21 +276,21 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
             </div>
           </div>
 
-          <div className="p-5">
-            <div className="flex items-center gap-4">
+          <div className="p-4 sm:p-5">
+            <div className="flex items-center gap-3.5 sm:gap-4">
               {person.photoUrl ? (
                 <img
                   src={person.photoUrl}
                   alt={person.name}
-                  className="w-16 h-16 rounded-xl object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+                  className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl object-cover border border-stone-200 dark:border-stone-700 shrink-0"
                 />
               ) : (
-                <div className="w-16 h-16 rounded-xl bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-200 flex items-center justify-center text-lg font-bold shrink-0">
+                <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-200 flex items-center justify-center text-lg font-bold shrink-0">
                   {getInitials(person.name)}
                 </div>
               )}
               <div className="min-w-0 flex-1">
-                <h4 className="text-lg font-bold text-stone-900 dark:text-stone-100 truncate">
+                <h4 className="text-base sm:text-lg font-bold text-stone-900 dark:text-stone-100 truncate">
                   {person.name}
                 </h4>
                 <p className="text-xs font-mono text-[#C25E00] font-semibold mt-0.5">
@@ -338,7 +338,7 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
                 ref={canvasWrapRef}
                 className="inline-flex items-center justify-center rounded-xl bg-white p-3.5 border border-stone-200"
               >
-                <QRCodeCanvas value={qrValue} size={172} level="M" includeMargin={false} />
+                <QRCodeCanvas value={qrValue} size={164} level="M" includeMargin={false} />
               </div>
               <p className="mt-2.5 text-[11px] text-stone-500 dark:text-stone-400 text-center flex items-center gap-1.5">
                 <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -348,11 +348,11 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-3 gap-2">
+        <div className="mt-5 grid grid-cols-1 min-[380px]:grid-cols-3 gap-2">
           <button
             type="button"
             onClick={handleDownloadPDF}
-            className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-3 py-2.5 text-xs font-medium transition-colors"
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-3 py-2.5 min-h-[42px] text-xs font-medium transition-colors"
           >
             <FileText className="w-4 h-4 shrink-0" />
             <span>{t('qr.downloadPdf')}</span>
@@ -360,7 +360,7 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
           <button
             type="button"
             onClick={handleDownloadPNG}
-            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-700 px-3 py-2.5 text-xs font-medium transition-colors"
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-700 px-3 py-2.5 min-h-[42px] text-xs font-medium transition-colors"
           >
             <Download className="w-4 h-4 shrink-0" />
             <span>PNG</span>
@@ -368,7 +368,7 @@ export const QRCardModal: React.FC<QRCardModalProps> = ({
           <button
             type="button"
             onClick={handlePrintCard}
-            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-700 px-3 py-2.5 text-xs font-medium transition-colors"
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-700 px-3 py-2.5 min-h-[42px] text-xs font-medium transition-colors"
           >
             <Printer className="w-4 h-4 shrink-0" />
             <span>{t('qr.printCard')}</span>

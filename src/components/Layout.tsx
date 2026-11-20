@@ -13,11 +13,13 @@ import {
   LayoutDashboard,
   LogOut,
   Megaphone,
+  Menu,
   ScanLine,
   Settings,
   ShieldCheck,
   Users,
   UserCog,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -53,6 +55,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
   const location = useLocation();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,9 +69,35 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
         setNotifOpen(false);
       }
     };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setNotifOpen(false);
+        setMobileDrawerOpen(false);
+      }
+    };
     document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, []);
+
+  // Automatically close mobile drawer on route navigation
+  useEffect(() => {
+    setMobileDrawerOpen(false);
+    setNotifOpen(false);
+  }, [location.pathname]);
+
+  // Prevent background body scroll while mobile drawer is open
+  useEffect(() => {
+    if (!mobileDrawerOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [mobileDrawerOpen]);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
@@ -141,6 +170,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
   const mobileItems = navItems.filter((item) => item.mobile);
 
   const handleLogout = async () => {
+    setMobileDrawerOpen(false);
     await logout();
     navigate('/login');
   };
@@ -159,6 +189,119 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
   const pageHeading =
     title || navItems.find((item) => item.to === location.pathname)?.label || t('nav.dashboard');
 
+  const renderSidebarBody = (isMobileDrawer = false) => (
+    <>
+      {org && (
+        <div className="px-5 py-3.5 border-b border-stone-100 dark:border-stone-800/80 flex items-center gap-2.5">
+          {org.logoUrl && (
+            <img
+              src={org.logoUrl}
+              alt={org.name}
+              className="w-8 h-8 rounded-lg object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
+              {org.name}
+            </p>
+            <p className="text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5 font-mono">
+              {roleBadgeText}
+              {profile?.memberId ? ` · ${profile.memberId}` : ''}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
+        {profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'super_admin' ? (
+          <Link
+            to="/attendance"
+            className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 min-h-[44px] text-sm font-medium transition-colors"
+          >
+            <ScanLine className="w-4 h-4 shrink-0" />
+            <span className="whitespace-nowrap">{t('nav.startAttendance')}</span>
+          </Link>
+        ) : profile?.role === 'member' ? (
+          <Link
+            to="/mark"
+            className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 min-h-[44px] text-sm font-medium transition-colors"
+          >
+            <ScanLine className="w-4 h-4 shrink-0" />
+            <span className="whitespace-nowrap">{t('nav.markYourAttendance')}</span>
+          </Link>
+        ) : null}
+
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={
+                item.to === '/admin' ||
+                item.to === '/manager' ||
+                item.to === '/member' ||
+                item.to === '/parent' ||
+                item.to === '/super-admin' ||
+                item.to === '/attendance'
+              }
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-xl px-3 ${
+                  isMobileDrawer ? 'py-2.5 min-h-[44px]' : 'py-2'
+                } text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-stone-100 dark:bg-stone-800/90 text-[#C25E00] dark:text-amber-400'
+                    : 'text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800/50 hover:text-stone-900 dark:hover:text-stone-100'
+                }`
+              }
+            >
+              <Icon className="w-4 h-4 shrink-0" />
+              <span className="truncate">{item.label}</span>
+            </NavLink>
+          );
+        })}
+
+        {isMobileDrawer && (
+          <div className="pt-3 px-1">
+            <PWAInstallButton />
+          </div>
+        )}
+      </nav>
+
+      <div className="p-3 border-t border-stone-200 dark:border-stone-800 space-y-2 pb-safe">
+        <div className="flex items-center gap-2.5 px-2 py-1.5">
+          {profile?.photoUrl ? (
+            <img
+              src={profile.photoUrl}
+              alt={profile.name}
+              className="w-8 h-8 rounded-full object-cover border border-stone-200 dark:border-stone-700 shrink-0"
+            />
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-200 flex items-center justify-center text-xs font-semibold shrink-0">
+              {getInitials(profile?.name || '')}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
+              {profile?.name}
+            </p>
+            <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
+              {profile?.email}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 min-h-[42px] text-sm text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 hover:text-stone-900 dark:hover:text-stone-100 transition-colors"
+        >
+          <LogOut className="w-4 h-4 shrink-0" />
+          <span>{t('common.logout')}</span>
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-[#FAF9F6] dark:bg-[#0F0F11] text-stone-900 dark:text-stone-100 flex">
       {/* Desktop Sidebar */}
@@ -168,122 +311,56 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
             <Logo />
           </Link>
         </div>
-
-        {org && (
-          <div className="px-5 py-3.5 border-b border-stone-100 dark:border-stone-800/80 flex items-center gap-2.5">
-            {org.logoUrl && (
-              <img
-                src={org.logoUrl}
-                alt={org.name}
-                className="w-8 h-8 rounded-lg object-cover border border-stone-200 dark:border-stone-700 shrink-0"
-              />
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
-                {org.name}
-              </p>
-              <p className="text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5 font-mono">
-                {roleBadgeText}
-                {profile?.memberId ? ` · ${profile.memberId}` : ''}
-              </p>
-            </div>
-          </div>
-        )}
-
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
-          {profile?.role === 'admin' || profile?.role === 'manager' || profile?.role === 'super_admin' ? (
-            <Link
-              to="/attendance"
-              className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors"
-            >
-              <ScanLine className="w-4 h-4" />
-              <span className="whitespace-nowrap">{t('nav.startAttendance')}</span>
-            </Link>
-          ) : profile?.role === 'member' ? (
-            <Link
-              to="/mark"
-              className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-4 py-2.5 text-sm font-medium transition-colors"
-            >
-              <ScanLine className="w-4 h-4" />
-              <span className="whitespace-nowrap">{t('nav.markYourAttendance')}</span>
-            </Link>
-          ) : null}
-
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={
-                  item.to === '/admin' ||
-                  item.to === '/manager' ||
-                  item.to === '/member' ||
-                  item.to === '/parent' ||
-                  item.to === '/super-admin' ||
-                  item.to === '/attendance'
-                }
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
-                    isActive
-                      ? 'bg-stone-100 dark:bg-stone-800/90 text-stone-900 dark:text-stone-100'
-                      : 'text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800/50 hover:text-stone-900 dark:hover:text-stone-100'
-                  }`
-                }
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span className="truncate">{item.label}</span>
-              </NavLink>
-            );
-          })}
-        </nav>
-
-        <div className="p-3 border-t border-stone-200 dark:border-stone-800 space-y-2">
-          <div className="flex items-center gap-2.5 px-2 py-1.5">
-            {profile?.photoUrl ? (
-              <img
-                src={profile.photoUrl}
-                alt={profile.name}
-                className="w-8 h-8 rounded-full object-cover border border-stone-200 dark:border-stone-700 shrink-0"
-              />
-            ) : (
-              <div className="w-8 h-8 rounded-full bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-200 flex items-center justify-center text-xs font-semibold shrink-0">
-                {getInitials(profile?.name || '')}
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
-                {profile?.name}
-              </p>
-              <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
-                {profile?.email}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="w-full flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 hover:text-stone-900 dark:hover:text-stone-100 transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>{t('common.logout')}</span>
-          </button>
-        </div>
+        {renderSidebarBody(false)}
       </aside>
+
+      {/* Mobile Slide-Over Navigation Drawer */}
+      {mobileDrawerOpen && (
+        <div className="md:hidden fixed inset-0 z-50 flex no-print" role="dialog" aria-modal="true" aria-label="Navigation menu">
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs"
+            onClick={() => setMobileDrawerOpen(false)}
+          />
+          <aside className="relative w-[min(84vw,300px)] max-w-full bg-white dark:bg-[#141416] h-full flex flex-col border-r border-stone-200 dark:border-stone-800 shadow-2xl z-10">
+            <div className="h-14 px-4 flex items-center justify-between border-b border-stone-200 dark:border-stone-800 shrink-0">
+              <Link to={homePath} onClick={() => setMobileDrawerOpen(false)}>
+                <Logo />
+              </Link>
+              <button
+                type="button"
+                onClick={() => setMobileDrawerOpen(false)}
+                aria-label={t('common.close')}
+                className="inline-flex items-center justify-center w-10 h-10 rounded-lg text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {renderSidebarBody(true)}
+          </aside>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col md:pl-60 lg:pl-64 min-w-0">
-        <header className="sticky top-0 z-20 h-14 md:h-16 border-b border-stone-200 dark:border-stone-800 bg-[#FAF9F6]/90 dark:bg-[#0F0F11]/90 backdrop-blur-md px-4 md:px-8 flex items-center justify-between gap-4 no-print">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="md:hidden">
+        <header className="sticky top-0 z-20 h-14 md:h-16 border-b border-stone-200 dark:border-stone-800 bg-[#FAF9F6]/90 dark:bg-[#0F0F11]/90 backdrop-blur-md px-3 sm:px-4 md:px-8 flex items-center justify-between gap-2 sm:gap-4 no-print">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileDrawerOpen(true)}
+              aria-label="Open navigation menu"
+              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors shrink-0"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <Link to={homePath} className="md:hidden shrink-0">
               <Logo compact />
-            </div>
-            <h1 className="text-base md:text-lg font-semibold tracking-tight text-stone-900 dark:text-stone-100 truncate">
+            </Link>
+            <h1 className="text-sm sm:text-base md:text-lg font-semibold tracking-tight text-stone-900 dark:text-stone-100 truncate">
               {pageHeading}
             </h1>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <div className="hidden sm:block">
               <PWAInstallButton compact />
             </div>
@@ -296,7 +373,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
                 type="button"
                 onClick={() => setNotifOpen((o) => !o)}
                 aria-label={t('notifications.title')}
-                className="relative inline-flex items-center justify-center w-9 h-9 rounded-lg border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                className="relative inline-flex items-center justify-center w-10 h-10 rounded-lg border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
               >
                 <Bell className="w-4 h-4" />
                 {unreadCount > 0 && (
@@ -307,7 +384,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
               </button>
 
               {notifOpen && (
-                <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 shadow-xl overflow-hidden z-40">
+                <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-80 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 shadow-xl overflow-hidden z-40">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 dark:border-stone-800">
                     <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">
                       {t('notifications.title')}
@@ -361,7 +438,7 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
           </div>
         </header>
 
-        <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 pb-24 md:py-8 md:pb-10">
+        <main className="flex-1 w-full max-w-6xl mx-auto px-3.5 sm:px-4 md:px-8 py-5 pb-24 md:py-8 md:pb-10">
           {children}
         </main>
       </div>
@@ -369,33 +446,35 @@ export const Layout: React.FC<LayoutProps> = ({ title, children }) => {
       {/* Mobile Bottom Navigation */}
       <nav
         aria-label="Primary"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 h-16 border-t border-stone-200 dark:border-stone-800 bg-white/95 dark:bg-[#141416]/95 backdrop-blur-md flex items-center justify-around px-1 no-print"
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 border-t border-stone-200 dark:border-stone-800 bg-white/95 dark:bg-[#141416]/95 backdrop-blur-md pb-safe no-print"
       >
-        {mobileItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={
-                item.to === '/admin' ||
-                item.to === '/manager' ||
-                item.to === '/member' ||
-                item.to === '/parent' ||
-                item.to === '/super-admin' ||
-                item.to === '/attendance'
-              }
-              className={({ isActive }) =>
-                `flex flex-col items-center justify-center gap-0.5 min-w-[56px] py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
-                  isActive ? 'text-[#C25E00]' : 'text-stone-500 dark:text-stone-400'
-                }`
-              }
-            >
-              <Icon className="w-5 h-5" />
-              <span className="truncate max-w-[68px]">{item.label}</span>
-            </NavLink>
-          );
-        })}
+        <div className="h-16 flex items-center justify-around px-1">
+          {mobileItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={
+                  item.to === '/admin' ||
+                  item.to === '/manager' ||
+                  item.to === '/member' ||
+                  item.to === '/parent' ||
+                  item.to === '/super-admin' ||
+                  item.to === '/attendance'
+                }
+                className={({ isActive }) =>
+                  `flex flex-col items-center justify-center gap-0.5 flex-1 min-w-0 min-h-[48px] px-1 py-1.5 rounded-lg text-[10px] sm:text-[11px] font-medium transition-colors ${
+                    isActive ? 'text-[#C25E00]' : 'text-stone-500 dark:text-stone-400'
+                  }`
+                }
+              >
+                <Icon className="w-5 h-5 shrink-0" />
+                <span className="truncate max-w-full">{item.label}</span>
+              </NavLink>
+            );
+          })}
+        </div>
       </nav>
     </div>
   );

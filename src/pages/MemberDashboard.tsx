@@ -544,17 +544,17 @@ export const MemberDashboard: React.FC = () => {
           </section>
 
           {/* Monthly Calendar (Strictly Present / Absent / Leave) */}
-          <section className="lg:col-span-6 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6">
+          <section className="lg:col-span-6 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-4 sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">
                 {monthHeading}
               </h3>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={prevMonth}
                   aria-label={t('common.previous')}
-                  className="p-1.5 rounded-lg border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800"
+                  className="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
@@ -562,20 +562,20 @@ export const MemberDashboard: React.FC = () => {
                   type="button"
                   onClick={nextMonth}
                   aria-label={t('common.next')}
-                  className="p-1.5 rounded-lg border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800"
+                  className="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800"
                 >
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] font-medium text-stone-500 mb-2">
+            <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center text-[11px] font-medium text-stone-500 mb-2">
               {weekdayLabels.map((w) => (
                 <div key={w}>{w}</div>
               ))}
             </div>
 
-            <div className="grid grid-cols-7 gap-1.5">
+            <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
               {calendarDays.map((cell, idx) => {
                 if (!cell.day || !cell.dateStr) return <div key={idx} />;
                 const st = statusByDate.get(cell.dateStr);
@@ -583,7 +583,7 @@ export const MemberDashboard: React.FC = () => {
                   <div
                     key={cell.dateStr}
                     title={st ? `${cell.dateStr}: ${t(`common.${st}`)}` : cell.dateStr}
-                    className={`h-10 rounded-lg border flex flex-col items-center justify-center text-xs font-medium tabular-nums ${cellColors(
+                    className={`h-9 sm:h-10 rounded-lg border flex flex-col items-center justify-center text-xs font-medium tabular-nums ${cellColors(
                       st
                     )} ${cell.dateStr === today ? 'ring-2 ring-[#C25E00]' : ''}`}
                   >

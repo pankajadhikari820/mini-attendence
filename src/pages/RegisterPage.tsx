@@ -1,6 +1,15 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { CheckCircle2 } from 'lucide-react';
+import {
+  AlertCircle,
+  Building2,
+  CheckCircle2,
+  GraduationCap,
+  KeyRound,
+  UserCog,
+  UserPlus,
+  Users,
+} from 'lucide-react';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
 import type { ManagerCodeLookup, OrgCodeLookup, OrgType } from '../types';
@@ -230,13 +239,14 @@ export const RegisterPage: React.FC = () => {
                 setMode('create');
                 setError('');
               }}
-              className={`py-2 text-sm font-medium rounded-lg transition-colors ${
+              className={`min-h-[40px] px-2 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors inline-flex items-center justify-center gap-1.5 ${
                 mode === 'create'
                   ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                   : 'text-stone-600 dark:text-stone-400'
               }`}
             >
-              {t('auth.tabCreateOrg')}
+              <Building2 className="w-4 h-4 shrink-0" />
+              <span className="truncate">{t('auth.tabCreateOrg')}</span>
             </button>
             <button
               type="button"
@@ -244,22 +254,24 @@ export const RegisterPage: React.FC = () => {
                 setMode('join');
                 setError('');
               }}
-              className={`py-2 text-sm font-medium rounded-lg transition-colors ${
+              className={`min-h-[40px] px-2 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors inline-flex items-center justify-center gap-1.5 ${
                 mode === 'join'
                   ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                   : 'text-stone-600 dark:text-stone-400'
               }`}
             >
-              {t('auth.tabJoinOrg')}
+              <UserPlus className="w-4 h-4 shrink-0" />
+              <span className="truncate">{t('auth.tabJoinOrg')}</span>
             </button>
           </div>
 
           {error && (
             <div
               role="alert"
-              className="mt-5 rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-4 py-3 text-sm text-red-700 dark:text-red-300"
+              className="mt-5 rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-4 py-3 text-sm text-red-700 dark:text-red-300 flex items-start gap-2.5"
             >
-              {error}
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{error}</span>
             </div>
           )}
 
@@ -387,9 +399,10 @@ export const RegisterPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white py-2.5 text-sm font-medium transition-colors"
+                className="w-full min-h-[46px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white py-3 text-sm font-medium transition-colors"
               >
-                {submitting ? t('common.saving') : t('auth.createOrgBtn')}
+                <Building2 className="w-4 h-4" />
+                <span>{submitting ? t('common.saving') : t('auth.createOrgBtn')}</span>
               </button>
             </form>
           ) : (
@@ -401,9 +414,9 @@ export const RegisterPage: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {(
                     [
-                      { id: 'member', label: t('auth.joinRoleMember') },
-                      { id: 'manager', label: t('auth.joinRoleManager') },
-                      { id: 'parent', label: t('auth.joinRoleParent') },
+                      { id: 'member', label: t('auth.joinRoleMember'), Icon: GraduationCap },
+                      { id: 'manager', label: t('auth.joinRoleManager'), Icon: UserCog },
+                      { id: 'parent', label: t('auth.joinRoleParent'), Icon: Users },
                     ] as const
                   ).map((opt) => (
                     <button
@@ -415,13 +428,18 @@ export const RegisterPage: React.FC = () => {
                         setVerifiedManager(null);
                         setError('');
                       }}
-                      className={`rounded-xl border px-3 py-2.5 text-left text-xs font-medium transition-colors ${
+                      className={`min-h-[44px] rounded-xl border px-3 py-2.5 text-left text-xs font-medium transition-colors flex items-center gap-2 ${
                         joinRole === opt.id
                           ? 'border-[#C25E00] bg-amber-50/50 dark:bg-amber-950/20 text-stone-900 dark:text-stone-100'
                           : 'border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400'
                       }`}
                     >
-                      {opt.label}
+                      <opt.Icon
+                        className={`w-4 h-4 shrink-0 ${
+                          joinRole === opt.id ? 'text-[#C25E00]' : 'text-stone-400'
+                        }`}
+                      />
+                      <span>{opt.label}</span>
                     </button>
                   ))}
                 </div>
@@ -431,7 +449,7 @@ export const RegisterPage: React.FC = () => {
                 <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1.5">
                   {joinRole === 'member' ? t('auth.managerCodeLabel') : t('auth.orgCodeLabel')}
                 </label>
-                <div className="flex gap-2">
+                <div className="flex flex-col min-[360px]:flex-row gap-2">
                   <input
                     type="text"
                     required
@@ -442,15 +460,16 @@ export const RegisterPage: React.FC = () => {
                       setVerifiedManager(null);
                     }}
                     placeholder="ABC123"
-                    className="flex-1 rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm font-mono uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
+                    className="flex-1 min-w-0 min-h-[44px] rounded-xl border border-stone-300 dark:border-stone-700 bg-transparent px-3.5 py-2.5 text-sm font-mono uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-[#C25E00]/30 focus:border-[#C25E00]"
                   />
                   <button
                     type="button"
                     onClick={handleVerifyCode}
                     disabled={verifyingCode}
-                    className="rounded-xl border border-stone-300 dark:border-stone-700 px-4 py-2.5 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800 whitespace-nowrap"
+                    className="min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-300 dark:border-stone-700 px-4 py-2.5 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800 whitespace-nowrap"
                   >
-                    {verifyingCode ? '...' : t('auth.verifyCodeBtn')}
+                    <KeyRound className="w-4 h-4 text-[#C25E00]" />
+                    <span>{verifyingCode ? '...' : t('auth.verifyCodeBtn')}</span>
                   </button>
                 </div>
 
@@ -605,9 +624,10 @@ export const RegisterPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white py-2.5 text-sm font-medium transition-colors"
+                className="w-full min-h-[46px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white py-3 text-sm font-medium transition-colors"
               >
-                {submitting ? t('common.saving') : t('auth.joinBtn')}
+                <UserPlus className="w-4 h-4" />
+                <span>{submitting ? t('common.saving') : t('auth.joinBtn')}</span>
               </button>
             </form>
           )}

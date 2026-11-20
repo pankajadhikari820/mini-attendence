@@ -539,12 +539,12 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
             {targetRole === 'member' && classes.length > 0 && (
               <select
                 value={classFilter}
                 onChange={(e) => setClassFilter(e.target.value)}
-                className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] px-3 py-2.5 text-sm"
+                className="col-span-2 sm:col-span-1 w-full sm:w-auto rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] px-3 py-2.5 text-sm"
               >
                 <option value="all">{t('academics.allClasses')}</option>
                 {classes.map((c) => (
@@ -558,7 +558,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-              className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] px-3 py-2.5 text-sm"
+              className="w-full sm:w-auto rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] px-3 py-2.5 text-sm"
             >
               <option value="all">{t('people.statusAll')}</option>
               <option value="active">{t('common.active')}</option>
@@ -569,7 +569,7 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as 'name' | 'memberId')}
-              className="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] px-3 py-2.5 text-sm"
+              className="w-full sm:w-auto rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] px-3 py-2.5 text-sm"
             >
               <option value="name">{t('common.name')}</option>
               <option value="memberId">{t('common.memberId')}</option>
@@ -593,7 +593,137 @@ export const PeopleManagerView: React.FC<PeopleManagerViewProps> = ({
           />
         ) : (
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] overflow-hidden">
-            <div className="overflow-x-auto">
+            {/* Mobile Card List */}
+            <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800">
+              {paginated.map((person) => (
+                <div key={person.uid} className="p-4 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm text-stone-900 dark:text-stone-100 truncate">
+                        {person.name}
+                        {person.isDemo && (
+                          <span className="ml-2 text-xs font-normal text-stone-400">
+                            · {t('common.demo')}
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-stone-500 dark:text-stone-400 truncate">
+                        {person.email}
+                      </p>
+                    </div>
+                    <span
+                      className={`text-xs font-semibold shrink-0 ${
+                        person.status === 'active'
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : person.status === 'pending'
+                          ? 'text-amber-700 dark:text-amber-400'
+                          : 'text-stone-400'
+                      }`}
+                    >
+                      {t(`common.${person.status}`)}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600 dark:text-stone-400">
+                    <span className="font-mono font-medium text-stone-800 dark:text-stone-200">
+                      {person.memberId || '—'}
+                    </span>
+                    {person.managerCode && (
+                      <span className="font-mono text-stone-500">Code: {person.managerCode}</span>
+                    )}
+                    {(person.enrollmentNumber || person.rollNumber) && (
+                      <span className="font-mono">
+                        #{person.enrollmentNumber || person.rollNumber}
+                      </span>
+                    )}
+                    {targetRole === 'member' && person.className && (
+                      <span>{person.className}</span>
+                    )}
+                    {adminViewingAllMembers && person.managerId && managerNameMap.get(person.managerId) && (
+                      <span>{managerNameMap.get(person.managerId)}</span>
+                    )}
+                    {person.phone && <span className="tabular-nums">{person.phone}</span>}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    {person.status === 'pending' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleApprove(person)}
+                          className="min-h-[38px] rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 text-xs font-medium"
+                        >
+                          {t('dashboard.approve')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReject(person)}
+                          className="min-h-[38px] rounded-lg border border-stone-200 dark:border-stone-700 px-3 py-1.5 text-xs text-stone-600 hover:text-red-600"
+                        >
+                          {t('dashboard.reject')}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {person.status === 'active' && (
+                          <button
+                            type="button"
+                            onClick={() => setQrPerson(person)}
+                            title={t('people.viewQr')}
+                            aria-label={t('people.viewQr')}
+                            className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300 hover:text-[#C25E00]"
+                          >
+                            <QrCode className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(person)}
+                          title={t('common.edit')}
+                          aria-label={t('common.edit')}
+                          className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatus(person)}
+                          title={
+                            person.status === 'active'
+                              ? t('people.deactivate')
+                              : t('people.activate')
+                          }
+                          aria-label={
+                            person.status === 'active'
+                              ? t('people.deactivate')
+                              : t('people.activate')
+                          }
+                          className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300 hover:text-amber-700"
+                        >
+                          {person.status === 'active' ? (
+                            <UserX className="w-4 h-4" />
+                          ) : (
+                            <UserCheck className="w-4 h-4" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDelete(person)}
+                          title={t('people.remove')}
+                          aria-label={t('people.remove')}
+                          className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300 hover:text-red-600"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500 dark:text-stone-400">
                   <tr>

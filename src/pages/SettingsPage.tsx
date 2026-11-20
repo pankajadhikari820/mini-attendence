@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Camera, Database, MapPin, QrCode, Trash2, Upload } from 'lucide-react';
+import { Camera, Database, MapPin, Moon, QrCode, Save, Sun, Trash2, Upload } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useTheme } from '../context/ThemeContext';
@@ -340,9 +340,10 @@ export const SettingsPage: React.FC = () => {
             <button
               type="submit"
               disabled={savingProfile}
-              className="rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2 text-sm font-medium"
+              className="w-full sm:w-auto min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2.5 text-sm font-medium"
             >
-              {savingProfile ? t('common.saving') : t('common.save')}
+              <Save className="w-4 h-4" />
+              <span>{savingProfile ? t('common.saving') : t('common.save')}</span>
             </button>
           </form>
         </section>
@@ -368,24 +369,26 @@ export const SettingsPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setTheme('light')}
-                className={`px-3 py-1 rounded-md ${
+                className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1 rounded-md ${
                   theme === 'light'
                     ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                     : 'text-stone-500'
                 }`}
               >
-                {t('settings.lightMode')}
+                <Sun className="w-3.5 h-3.5" />
+                <span>{t('settings.lightMode')}</span>
               </button>
               <button
                 type="button"
                 onClick={() => setTheme('dark')}
-                className={`px-3 py-1 rounded-md ${
+                className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1 rounded-md ${
                   theme === 'dark'
                     ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                     : 'text-stone-500'
                 }`}
               >
-                {t('settings.darkMode')}
+                <Moon className="w-3.5 h-3.5" />
+                <span>{t('settings.darkMode')}</span>
               </button>
             </div>
           </div>
@@ -634,9 +637,10 @@ export const SettingsPage: React.FC = () => {
                 <button
                   type="submit"
                   disabled={savingOrg}
-                  className="rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2.5 text-sm font-medium"
+                  className="w-full sm:w-auto min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2.5 text-sm font-medium"
                 >
-                  {savingOrg ? t('common.saving') : t('common.save')}
+                  <Save className="w-4 h-4" />
+                  <span>{savingOrg ? t('common.saving') : t('common.save')}</span>
                 </button>
               </form>
             </section>

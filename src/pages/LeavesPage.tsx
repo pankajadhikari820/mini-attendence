@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, X } from 'lucide-react';
+import { CalendarClock, Check, Send, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
@@ -116,8 +116,9 @@ export const LeavesPage: React.FC = () => {
         {/* Request Leave Form (Member & Manager) */}
         {profile?.role !== 'admin' && (
           <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6">
-            <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100 mb-4">
-              {t('leaves.requestLeave')}
+            <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100 mb-4 flex items-center gap-2">
+              <CalendarClock className="w-4 h-4 text-[#C25E00]" />
+              <span>{t('leaves.requestLeave')}</span>
             </h2>
             <form onSubmit={handleRequestSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -166,9 +167,10 @@ export const LeavesPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={submitting}
-                className="rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2.5 text-sm font-medium"
+                className="w-full sm:w-auto min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2.5 text-sm font-medium"
               >
-                {submitting ? t('common.saving') : t('leaves.submitRequest')}
+                <Send className="w-4 h-4" />
+                <span>{submitting ? t('common.saving') : t('leaves.submitRequest')}</span>
               </button>
             </form>
           </section>

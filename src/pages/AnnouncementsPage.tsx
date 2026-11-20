@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Megaphone, Send, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useToast } from '../context/ToastContext';
@@ -92,8 +92,9 @@ export const AnnouncementsPage: React.FC = () => {
       <div className="space-y-8 max-w-3xl">
         {canPost && (
           <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6">
-            <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100 mb-4">
-              {t('announcements.postTitle')}
+            <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100 mb-4 flex items-center gap-2">
+              <Megaphone className="w-4 h-4 text-[#C25E00]" />
+              <span>{t('announcements.postTitle')}</span>
             </h2>
             <form onSubmit={handlePost} className="space-y-4">
               <textarea
@@ -131,9 +132,10 @@ export const AnnouncementsPage: React.FC = () => {
                 <button
                   type="submit"
                   disabled={posting}
-                  className="rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2 text-sm font-medium"
+                  className="w-full sm:w-auto min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-5 py-2 text-sm font-medium"
                 >
-                  {posting ? t('common.saving') : t('announcements.postBtn')}
+                  <Send className="w-4 h-4" />
+                  <span>{posting ? t('common.saving') : t('announcements.postBtn')}</span>
                 </button>
               </div>
             </form>

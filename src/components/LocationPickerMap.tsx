@@ -10,9 +10,9 @@ interface LocationPickerMapProps {
 
 const pinIcon = L.divIcon({
   className: 'sas-map-pin',
-  html: `<div style="width:28px;height:28px;border-radius:50% 50% 50% 0;background:#C25E00;border:3px solid #FFFFFF;transform:rotate(-45deg);box-shadow:0 3px 10px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;"><div style="width:8px;height:8px;border-radius:50%;background:#FFFFFF;transform:rotate(45deg);"></div></div>`,
-  iconSize: [28, 28],
-  iconAnchor: [14, 28],
+  html: `<svg width="32" height="38" viewBox="0 0 32 38" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 3px 6px rgba(0,0,0,0.28));"><path d="M16 1.5C8.544 1.5 2.5 7.544 2.5 15C2.5 24.75 16 36.5 16 36.5C16 36.5 29.5 24.75 29.5 15C29.5 7.544 23.456 1.5 16 1.5Z" fill="#C25E00" stroke="#FFFFFF" stroke-width="2.5" stroke-linejoin="round"/><circle cx="16" cy="14.5" r="4.5" fill="#FFFFFF"/></svg>`,
+  iconSize: [32, 38],
+  iconAnchor: [16, 37],
 });
 
 export const LocationPickerMap: React.FC<LocationPickerMapProps> = ({

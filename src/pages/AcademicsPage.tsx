@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ArrowRight,
   BookOpen,
   Building,
   Check,
@@ -320,7 +321,7 @@ export const AcademicsPage: React.FC = () => {
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex flex-wrap gap-2 border-b border-stone-200 dark:border-stone-800 pb-3">
+        <div className="flex flex-nowrap sm:flex-wrap overflow-x-auto no-scrollbar gap-2 border-b border-stone-200 dark:border-stone-800 pb-3 -mx-1 px-1">
           {tabs.map((item) => {
             const Icon = item.icon;
             const active = tab === item.id;
@@ -329,13 +330,13 @@ export const AcademicsPage: React.FC = () => {
                 key={item.id}
                 type="button"
                 onClick={() => setTab(item.id)}
-                className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs sm:text-sm font-medium transition-colors ${
+                className={`min-h-[40px] shrink-0 whitespace-nowrap inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs sm:text-sm font-medium transition-colors ${
                   active
                     ? 'bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900'
                     : 'border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100'
                 }`}
               >
-                <Icon className="w-4 h-4" />
+                <Icon className="w-4 h-4 shrink-0" />
                 <span>{item.label}</span>
                 <span className="font-mono text-xs opacity-75 tabular-nums">
                   {formatNumber(item.count)}
@@ -831,9 +832,14 @@ export const AcademicsPage: React.FC = () => {
                         return (
                           <div key={link.id} className="p-4 flex flex-wrap items-center justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
-                                {link.parentName} ({link.relationship}) →{' '}
-                                {studentObj?.name || link.studentName || link.studentMemberId}
+                              <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 flex flex-wrap items-center gap-1">
+                                <span>
+                                  {link.parentName} ({link.relationship})
+                                </span>
+                                <ArrowRight className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                                <span>
+                                  {studentObj?.name || link.studentName || link.studentMemberId}
+                                </span>
                               </p>
                               <p className="text-xs text-stone-500 font-mono mt-0.5">
                                 {link.parentEmail} · ID: {link.studentMemberId}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Clock, ShieldAlert } from 'lucide-react';
+import { Clock, LogOut, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { Logo } from '../components/Logo';
@@ -62,9 +62,10 @@ export const PendingApprovalPage: React.FC = () => {
           <button
             type="button"
             onClick={handleLogout}
-            className="mt-6 w-full rounded-xl border border-stone-300 dark:border-stone-700 py-2.5 text-sm font-medium text-stone-800 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors"
+            className="mt-6 w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-2.5 text-sm font-medium text-stone-800 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-800 transition-colors"
           >
-            {t('common.logout')}
+            <LogOut className="w-4 h-4" />
+            <span>{t('common.logout')}</span>
           </button>
         </div>
       </main>

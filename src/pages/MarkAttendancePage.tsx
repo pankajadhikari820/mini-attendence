@@ -5,14 +5,18 @@ import {
   AlertCircle,
   ArrowLeft,
   BookOpen,
+  CalendarClock,
   Camera,
   CameraOff,
   CheckCircle2,
+  ClipboardList,
   MapPin,
+  QrCode,
   RefreshCw,
   Search,
   CheckSquare,
   Square,
+  XCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -424,28 +428,30 @@ export const MarkAttendancePage: React.FC = () => {
             </p>
           </div>
 
-          <div className="inline-flex p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 self-start">
+          <div className="grid grid-cols-2 sm:inline-flex w-full sm:w-auto p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 sm:self-start">
             <button
               type="button"
               onClick={() => setTab('scan')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`min-h-[40px] px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap inline-flex items-center justify-center gap-1.5 ${
                 tab === 'scan'
                   ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                   : 'text-stone-600 dark:text-stone-400'
               }`}
             >
-              {t('attendance.tabScan')}
+              <QrCode className="w-4 h-4 shrink-0" />
+              <span>{t('attendance.tabScan')}</span>
             </button>
             <button
               type="button"
               onClick={() => setTab('manual')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`min-h-[40px] px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap inline-flex items-center justify-center gap-1.5 ${
                 tab === 'manual'
                   ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                   : 'text-stone-600 dark:text-stone-400'
               }`}
             >
-              {t('attendance.tabManual')}
+              <ClipboardList className="w-4 h-4 shrink-0" />
+              <span>{t('attendance.tabManual')}</span>
             </button>
           </div>
         </div>
@@ -503,23 +509,23 @@ export const MarkAttendancePage: React.FC = () => {
                 </div>
               )}
 
-              <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="mt-4 grid grid-cols-1 min-[360px]:grid-cols-2 gap-3">
                 {cameraRunning ? (
                   <button
                     type="button"
                     onClick={stopCamera}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3.5 text-sm font-medium text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-800"
+                    className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-800"
                   >
-                    <CameraOff className="w-4 h-4" />
+                    <CameraOff className="w-4 h-4 shrink-0" />
                     <span>{t('attendance.stopCamera')}</span>
                   </button>
                 ) : (
                   <button
                     type="button"
                     onClick={() => startCamera(facingMode)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white py-3.5 text-sm font-medium"
+                    className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white py-3 text-sm font-medium"
                   >
-                    <Camera className="w-4 h-4" />
+                    <Camera className="w-4 h-4 shrink-0" />
                     <span>{t('attendance.startCamera')}</span>
                   </button>
                 )}
@@ -527,9 +533,9 @@ export const MarkAttendancePage: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleSwitchCamera}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3.5 text-sm font-medium text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-800"
+                  className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium text-stone-800 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-stone-800"
                 >
-                  <RefreshCw className="w-4 h-4" />
+                  <RefreshCw className="w-4 h-4 shrink-0" />
                   <span>{t('attendance.switchCamera')}</span>
                 </button>
               </div>
@@ -739,19 +745,26 @@ export const MarkAttendancePage: React.FC = () => {
                                 : st === 'absent'
                                 ? 'bg-red-600 text-white border-red-600'
                                 : 'bg-sky-600 text-white border-sky-600';
+                            const StatusIcon =
+                              st === 'present'
+                                ? CheckCircle2
+                                : st === 'absent'
+                                ? XCircle
+                                : CalendarClock;
                             return (
                               <button
                                 key={st}
                                 type="button"
                                 disabled={!canEditSelectedDate || savingUid === person.uid}
                                 onClick={() => handleSingleMark(person, st)}
-                                className={`px-3 py-2 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap ${
+                                className={`min-h-[40px] px-2 sm:px-3 py-2 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap inline-flex items-center justify-center gap-1 ${
                                   active
                                     ? activeStyle
                                     : 'border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-800'
                                 }`}
                               >
-                                {t(`common.${st}`)}
+                                <StatusIcon className="w-3.5 h-3.5 shrink-0" />
+                                <span>{t(`common.${st}`)}</span>
                               </button>
                             );
                           })}

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Building2, ShieldCheck } from 'lucide-react';
+import { ArrowRight, Building2, Globe, KeyRound, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import type { Organization } from '../types';
@@ -56,15 +56,24 @@ export const SuperAdminDashboard: React.FC = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5">
-            <p className="text-xs text-stone-500">{t('superAdmin.totalOrgs')}</p>
+            <div className="flex items-center justify-between text-stone-500">
+              <p className="text-xs">{t('superAdmin.totalOrgs')}</p>
+              <Building2 className="w-4 h-4 text-[#C25E00]" />
+            </div>
             <p className="mt-2 text-3xl font-bold tabular-nums">{formatNumber(orgs.length)}</p>
           </div>
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5">
-            <p className="text-xs text-stone-500">{t('superAdmin.activeWorkspace')}</p>
+            <div className="flex items-center justify-between text-stone-500">
+              <p className="text-xs">{t('superAdmin.activeWorkspace')}</p>
+              <Globe className="w-4 h-4 text-[#C25E00]" />
+            </div>
             <p className="mt-2 text-lg font-bold truncate">{org?.name || '—'}</p>
           </div>
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5">
-            <p className="text-xs text-stone-500">{t('dashboard.yourOrgCode')}</p>
+            <div className="flex items-center justify-between text-stone-500">
+              <p className="text-xs">{t('dashboard.yourOrgCode')}</p>
+              <KeyRound className="w-4 h-4 text-[#C25E00]" />
+            </div>
             <p className="mt-2 text-2xl font-mono font-bold text-[#C25E00]">
               {org?.orgCode || '—'}
             </p>
@@ -77,7 +86,32 @@ export const SuperAdminDashboard: React.FC = () => {
           <EmptyState title={t('common.noData')} description={t('superAdmin.subtitle')} />
         ) : (
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] overflow-hidden">
-            <div className="overflow-x-auto">
+            {/* Mobile Card List */}
+            <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800">
+              {orgs.map((o) => (
+                <div key={o.id} className="p-4 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Building2 className="w-4 h-4 text-[#C25E00] shrink-0" />
+                      <p className="font-semibold text-sm text-stone-900 dark:text-stone-100 truncate">
+                        {o.name}
+                      </p>
+                    </div>
+                    <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase shrink-0">
+                      {o.status || 'active'}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500 tabular-nums">
+                    <span>{o.type}</span>
+                    <span className="font-mono text-stone-700 dark:text-stone-300">{o.orgCode}</span>
+                    <span className="font-mono">{o.lowAttendanceThreshold ?? 75}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500">
                   <tr>

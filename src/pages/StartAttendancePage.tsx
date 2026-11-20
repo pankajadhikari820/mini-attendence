@@ -628,7 +628,7 @@ export const StartAttendancePage: React.FC = () => {
                   width="340"
                   height="340"
                   viewBox="0 0 340 340"
-                  className="-rotate-90 w-[280px] h-[280px] sm:w-[340px] sm:h-[340px]"
+                  className="-rotate-90 w-[236px] h-[236px] min-[390px]:w-[280px] min-[390px]:h-[280px] sm:w-[340px] sm:h-[340px]"
                   aria-hidden="true"
                 >
                   <circle
@@ -655,7 +655,7 @@ export const StartAttendancePage: React.FC = () => {
                 </svg>
 
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="rounded-2xl bg-white p-4 sm:p-5 border border-stone-200 shadow-xs">
+                  <div className="rounded-2xl bg-white p-3 min-[390px]:p-4 sm:p-5 border border-stone-200 shadow-xs [&_svg]:w-[144px] [&_svg]:h-[144px] min-[390px]:[&_svg]:w-[176px] min-[390px]:[&_svg]:h-[176px] sm:[&_svg]:w-[200px] sm:[&_svg]:h-[200px]">
                     {qrPayload && (
                       <QRCodeSVG
                         value={qrPayload}
@@ -684,11 +684,11 @@ export const StartAttendancePage: React.FC = () => {
               </div>
 
               {/* 6-digit Live Code */}
-              <div className="mt-6 w-full max-w-sm rounded-2xl border border-stone-200 dark:border-stone-800 bg-[#FAF9F6] dark:bg-stone-900/70 px-6 py-5">
+              <div className="mt-6 w-full max-w-sm rounded-2xl border border-stone-200 dark:border-stone-800 bg-[#FAF9F6] dark:bg-stone-900/70 px-4 sm:px-6 py-4 sm:py-5">
                 <p className="text-xs font-medium text-stone-500 dark:text-stone-400">
                   {t('session.liveCodeLabel')}
                 </p>
-                <p className="mt-2 font-mono text-4xl sm:text-5xl font-bold tracking-[0.22em] text-stone-900 dark:text-stone-50 tabular-nums">
+                <p className="mt-2 font-mono text-3xl min-[390px]:text-4xl sm:text-5xl font-bold tracking-[0.18em] sm:tracking-[0.22em] text-stone-900 dark:text-stone-50 tabular-nums">
                   {currentCode ? `${currentCode.slice(0, 3)} ${currentCode.slice(3)}` : '--- ---'}
                 </p>
               </div>
@@ -1022,9 +1022,9 @@ export const StartAttendancePage: React.FC = () => {
             )}
           </div>
 
-          <div className="pt-2 flex items-center justify-between gap-4">
+          <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <span className="text-xs text-stone-500 dark:text-stone-400 flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5" />
+              <Clock className="w-3.5 h-3.5 shrink-0" />
               <span>
                 {effectiveClassId
                   ? `${selectedSlot?.className || selectedAssignment?.className}: ${formatNumber(totalExpected)}`
@@ -1035,7 +1035,7 @@ export const StartAttendancePage: React.FC = () => {
             <button
               type="submit"
               disabled={starting}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-6 py-3 text-sm font-medium transition-colors"
+              className="w-full sm:w-auto min-h-[46px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white px-6 py-3 text-sm font-medium transition-colors"
             >
               <Play className="w-4 h-4 fill-current" />
               <span>{starting ? t('session.starting') : t('session.startBtn')}</span>

@@ -15,11 +15,16 @@ import {
 } from 'recharts';
 import {
   AlertTriangle,
+  ArrowDown,
+  BarChart3,
   Bell,
+  CalendarDays,
+  ClipboardList,
   Download,
   FileSpreadsheet,
   FileText,
   Search,
+  Users,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -726,59 +731,61 @@ export const ReportsPage: React.FC = () => {
       <div className="space-y-6">
         {/* Top Tabs & Export Buttons */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="inline-flex flex-wrap p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 self-start">
-            {(['analytics', 'records', 'summary', 'register'] as const).map((tabKey) => (
+          <div className="flex flex-nowrap overflow-x-auto no-scrollbar p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 max-w-full self-start">
+            {(
+              [
+                { key: 'analytics', label: t('reports.tabAnalytics'), Icon: BarChart3 },
+                { key: 'records', label: t('reports.tabRecords'), Icon: ClipboardList },
+                { key: 'summary', label: t('reports.tabSummary'), Icon: Users },
+                { key: 'register', label: t('reports.tabRegister'), Icon: CalendarDays },
+              ] as const
+            ).map(({ key: tabKey, label, Icon }) => (
               <button
                 key={tabKey}
                 type="button"
                 onClick={() => setView(tabKey)}
-                className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[38px] shrink-0 px-3 sm:px-3.5 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap inline-flex items-center gap-1.5 ${
                   view === tabKey
                     ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                     : 'text-stone-600 dark:text-stone-400'
                 }`}
               >
-                {tabKey === 'analytics'
-                  ? t('reports.tabAnalytics')
-                  : tabKey === 'records'
-                  ? t('reports.tabRecords')
-                  : tabKey === 'summary'
-                  ? t('reports.tabSummary')
-                  : t('reports.tabRegister')}
+                <Icon className="w-4 h-4 shrink-0" />
+                <span>{label}</span>
               </button>
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={handleExportExcel}
-              className="inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] hover:bg-stone-50 dark:hover:bg-stone-800 px-3.5 py-2 text-sm font-medium"
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] hover:bg-stone-50 dark:hover:bg-stone-800 px-2.5 sm:px-3.5 py-2 text-xs sm:text-sm font-medium"
             >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
-              <span>{t('reports.exportExcel')}</span>
+              <FileSpreadsheet className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+              <span className="truncate">{t('reports.exportExcel')}</span>
             </button>
             <button
               type="button"
               onClick={handleExportCsv}
-              className="inline-flex items-center gap-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] hover:bg-stone-50 dark:hover:bg-stone-800 px-3.5 py-2 text-sm font-medium"
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] hover:bg-stone-50 dark:hover:bg-stone-800 px-2.5 sm:px-3.5 py-2 text-xs sm:text-sm font-medium"
             >
-              <Download className="w-4 h-4" />
-              <span>{t('reports.exportCsv')}</span>
+              <Download className="w-4 h-4 shrink-0" />
+              <span className="truncate">{t('reports.exportCsv')}</span>
             </button>
             <button
               type="button"
               onClick={handleExportPdf}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-3.5 py-2 text-sm font-medium"
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white px-2.5 sm:px-3.5 py-2 text-xs sm:text-sm font-medium"
             >
-              <FileText className="w-4 h-4" />
-              <span>{t('reports.exportPdf')}</span>
+              <FileText className="w-4 h-4 shrink-0" />
+              <span className="truncate">{t('reports.exportPdf')}</span>
             </button>
           </div>
         </div>
 
         {/* Filter Bar */}
-        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-4 flex flex-wrap items-end gap-3">
+        <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-4 grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-end gap-3">
           {view === 'register' ? (
             <div>
               <label className="block text-xs text-stone-500 mb-1">{t('reports.month')}</label>
@@ -786,7 +793,7 @@ export const ReportsPage: React.FC = () => {
                 type="month"
                 value={registerMonth}
                 onChange={(e) => setRegisterMonth(e.target.value)}
-                className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
+                className="w-full lg:w-auto rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
               />
             </div>
           ) : (
@@ -797,7 +804,7 @@ export const ReportsPage: React.FC = () => {
                   type="date"
                   value={fromDate}
                   onChange={(e) => setFromDate(e.target.value)}
-                  className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
+                  className="w-full lg:w-auto rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
                 />
               </div>
               <div>
@@ -806,7 +813,7 @@ export const ReportsPage: React.FC = () => {
                   type="date"
                   value={toDate}
                   onChange={(e) => setToDate(e.target.value)}
-                  className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
+                  className="w-full lg:w-auto rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
                 />
               </div>
             </>
@@ -824,7 +831,7 @@ export const ReportsPage: React.FC = () => {
                   setClassFilter('all');
                   setSubjectFilter('all');
                 }}
-                className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm max-w-[160px]"
+                className="w-full lg:w-auto lg:max-w-[160px] rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
               >
                 <option value="all">{t('common.all')}</option>
                 {departments.map((d) => (
@@ -847,7 +854,7 @@ export const ReportsPage: React.FC = () => {
                   setClassFilter(e.target.value);
                   setSubjectFilter('all');
                 }}
-                className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm max-w-[170px]"
+                className="w-full lg:w-auto lg:max-w-[170px] rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
               >
                 <option value="all">{t('academics.allClasses')}</option>
                 {filteredClasses.map((c) => (
@@ -867,7 +874,7 @@ export const ReportsPage: React.FC = () => {
               <select
                 value={subjectFilter}
                 onChange={(e) => setSubjectFilter(e.target.value)}
-                className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm max-w-[180px]"
+                className="w-full lg:w-auto lg:max-w-[180px] rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
               >
                 <option value="all">{t('common.all')}</option>
                 {filteredSubjects.map((s) => (
@@ -886,7 +893,7 @@ export const ReportsPage: React.FC = () => {
                 <select
                   value={personFilter}
                   onChange={(e) => setPersonFilter(e.target.value)}
-                  className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm max-w-[170px]"
+                  className="w-full lg:w-auto lg:max-w-[170px] rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
                 >
                   <option value="all">{t('common.all')}</option>
                   {scopedPeople.map((p) => (
@@ -901,7 +908,7 @@ export const ReportsPage: React.FC = () => {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as 'all' | AttendanceStatus)}
-                  className="rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
+                  className="w-full lg:w-auto rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
                 >
                   <option value="all">{t('common.all')}</option>
                   <option value="present">{t('common.present')}</option>
@@ -912,7 +919,7 @@ export const ReportsPage: React.FC = () => {
             </>
           )}
 
-          <div className="relative flex-1 min-w-[180px]">
+          <div className="relative sm:col-span-2 lg:flex-1 lg:min-w-[180px]">
             <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -1079,7 +1086,49 @@ export const ReportsPage: React.FC = () => {
                     {t('reports.classBreakdownTitle')}
                   </h3>
                 </div>
-                <div className="overflow-x-auto">
+                {/* Mobile Card List */}
+                <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800 tabular-nums">
+                  {classBreakdown.map((c) => (
+                    <div key={c.classId} className="p-4 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold text-sm text-stone-900 dark:text-stone-100 truncate">
+                          {c.name}
+                        </p>
+                        <span
+                          className={`text-sm font-bold shrink-0 ${
+                            c.pct < threshold
+                              ? 'text-red-600 dark:text-red-400'
+                              : 'text-stone-900 dark:text-stone-100'
+                          }`}
+                        >
+                          {formatNumber(c.pct)}%
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div className="rounded-lg bg-stone-50 dark:bg-stone-900/60 px-2.5 py-1.5">
+                          <span className="text-stone-400 block text-[11px]">{t('common.present')}</span>
+                          <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                            {formatNumber(c.present)}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-stone-50 dark:bg-stone-900/60 px-2.5 py-1.5">
+                          <span className="text-stone-400 block text-[11px]">{t('common.absent')}</span>
+                          <span className="font-semibold text-red-600 dark:text-red-400">
+                            {formatNumber(c.absent)}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-stone-50 dark:bg-stone-900/60 px-2.5 py-1.5">
+                          <span className="text-stone-400 block text-[11px]">{t('common.leave')}</span>
+                          <span className="font-semibold text-sky-700 dark:text-sky-400">
+                            {formatNumber(c.leave)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Desktop Table */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500">
                       <tr>
@@ -1125,10 +1174,10 @@ export const ReportsPage: React.FC = () => {
             )}
 
             {/* Low Attendance Shortage List + Dispatch Alerts */}
-            <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5">
+            <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                  <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
                   <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">
                     {t('dashboard.lowAttendance')} ({t('dashboard.belowThreshold')} {threshold}%)
                   </h3>
@@ -1138,7 +1187,7 @@ export const ReportsPage: React.FC = () => {
                     type="button"
                     disabled={sendingAlerts}
                     onClick={handleDispatchAlerts}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white px-3.5 py-2 text-xs font-medium"
+                    className="min-h-[38px] inline-flex items-center gap-1.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white px-3.5 py-2 text-xs font-medium"
                   >
                     <Bell className="w-3.5 h-3.5" />
                     <span>{sendingAlerts ? t('common.loading') : t('alerts.sendAlertsBtn')}</span>
@@ -1149,44 +1198,75 @@ export const ReportsPage: React.FC = () => {
               {studentAnalyses.length === 0 ? (
                 <p className="text-sm text-stone-500">{t('dashboard.noLowAttendance')}</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="border-b border-stone-200 dark:border-stone-800 text-xs text-stone-500">
-                      <tr>
-                        <th className="py-2.5 pr-4 font-medium">{t('common.name')}</th>
-                        <th className="py-2.5 pr-4 font-medium">{t('common.memberId')}</th>
-                        <th className="py-2.5 pr-4 font-medium">{t('academics.classSection')}</th>
-                        <th className="py-2.5 pr-4 font-medium">{t('reports.shortageSubjects')}</th>
-                        <th className="py-2.5 text-right font-medium">{t('student.overallRate')}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-stone-100 dark:divide-stone-800 tabular-nums">
-                      {studentAnalyses.map((item) => (
-                        <tr key={item.student.uid}>
-                          <td className="py-2.5 pr-4 font-medium text-stone-900 dark:text-stone-100">
-                            {item.student.name}
-                          </td>
-                          <td className="py-2.5 pr-4 font-mono text-xs text-stone-500">
-                            {item.student.memberId}
-                          </td>
-                          <td className="py-2.5 pr-4 text-xs text-stone-600 dark:text-stone-400">
-                            {item.student.className || '—'}
-                          </td>
-                          <td className="py-2.5 pr-4 text-xs text-stone-600 dark:text-stone-400">
-                            {item.shortageSubjects.length > 0
-                              ? item.shortageSubjects
-                                  .map((s) => `${s.subjectName} (${s.percentage}%)`)
-                                  .join(', ')
-                              : '—'}
-                          </td>
-                          <td className="py-2.5 text-right font-semibold text-red-600 dark:text-red-400">
+                <>
+                  {/* Mobile Card List */}
+                  <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800 tabular-nums">
+                    {studentAnalyses.map((item) => (
+                      <div key={item.student.uid} className="py-3 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
+                              {item.student.name}
+                            </p>
+                            <p className="text-xs font-mono text-stone-500">
+                              {item.student.memberId}
+                              {item.student.className ? ` · ${item.student.className}` : ''}
+                            </p>
+                          </div>
+                          <span className="text-sm font-bold text-red-600 dark:text-red-400 shrink-0">
                             {formatNumber(item.overallPct)}%
-                          </td>
+                          </span>
+                        </div>
+                        {item.shortageSubjects.length > 0 && (
+                          <p className="text-xs text-stone-600 dark:text-stone-400">
+                            {item.shortageSubjects
+                              .map((s) => `${s.subjectName} (${s.percentage}%)`)
+                              .join(', ')}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Desktop Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="border-b border-stone-200 dark:border-stone-800 text-xs text-stone-500">
+                        <tr>
+                          <th className="py-2.5 pr-4 font-medium">{t('common.name')}</th>
+                          <th className="py-2.5 pr-4 font-medium">{t('common.memberId')}</th>
+                          <th className="py-2.5 pr-4 font-medium">{t('academics.classSection')}</th>
+                          <th className="py-2.5 pr-4 font-medium">{t('reports.shortageSubjects')}</th>
+                          <th className="py-2.5 text-right font-medium">{t('student.overallRate')}</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100 dark:divide-stone-800 tabular-nums">
+                        {studentAnalyses.map((item) => (
+                          <tr key={item.student.uid}>
+                            <td className="py-2.5 pr-4 font-medium text-stone-900 dark:text-stone-100">
+                              {item.student.name}
+                            </td>
+                            <td className="py-2.5 pr-4 font-mono text-xs text-stone-500">
+                              {item.student.memberId}
+                            </td>
+                            <td className="py-2.5 pr-4 text-xs text-stone-600 dark:text-stone-400">
+                              {item.student.className || '—'}
+                            </td>
+                            <td className="py-2.5 pr-4 text-xs text-stone-600 dark:text-stone-400">
+                              {item.shortageSubjects.length > 0
+                                ? item.shortageSubjects
+                                    .map((s) => `${s.subjectName} (${s.percentage}%)`)
+                                    .join(', ')
+                                : '—'}
+                            </td>
+                            <td className="py-2.5 text-right font-semibold text-red-600 dark:text-red-400">
+                              {formatNumber(item.overallPct)}%
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </section>
           </div>
@@ -1201,7 +1281,57 @@ export const ReportsPage: React.FC = () => {
               </div>
 
               <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* Mobile Card List */}
+                <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800">
+                  {paginatedRecords.map((r) => {
+                    const isManual = r.method === 'manual';
+                    const st = normalizeAttendanceStatus(r.status);
+                    return (
+                      <div
+                        key={r.id}
+                        className={`p-4 space-y-1.5 ${
+                          isManual ? 'bg-amber-50/70 dark:bg-amber-950/30' : ''
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
+                              {r.personName}
+                            </p>
+                            <p className="text-xs font-mono text-stone-500 tabular-nums">
+                              {formatDate(r.date)} · {r.personMemberId || '—'}
+                            </p>
+                          </div>
+                          <span
+                            className={`text-xs font-semibold shrink-0 ${
+                              st === 'present'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : st === 'leave'
+                                ? 'text-sky-700 dark:text-sky-400'
+                                : 'text-red-700 dark:text-red-400'
+                            }`}
+                          >
+                            {t(`common.${st}`)}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
+                          {r.subjectName && <span>{r.subjectName}</span>}
+                          <span
+                            className={
+                              isManual ? 'text-amber-800 dark:text-amber-300 font-semibold' : ''
+                            }
+                          >
+                            {t(`common.${r.method}`)}
+                          </span>
+                          {r.note && <span className="truncate max-w-full">{r.note}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Table */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500">
                       <tr>
@@ -1209,18 +1339,20 @@ export const ReportsPage: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => setSortBy('date')}
-                            className="hover:text-stone-900 dark:hover:text-stone-100"
+                            className="inline-flex items-center gap-1 hover:text-stone-900 dark:hover:text-stone-100"
                           >
-                            {t('common.date')} {sortBy === 'date' ? '↓' : ''}
+                            <span>{t('common.date')}</span>
+                            {sortBy === 'date' && <ArrowDown className="w-3.5 h-3.5" />}
                           </button>
                         </th>
                         <th className="py-3 px-4 font-medium">
                           <button
                             type="button"
                             onClick={() => setSortBy('personName')}
-                            className="hover:text-stone-900 dark:hover:text-stone-100"
+                            className="inline-flex items-center gap-1 hover:text-stone-900 dark:hover:text-stone-100"
                           >
-                            {t('common.name')} {sortBy === 'personName' ? '↓' : ''}
+                            <span>{t('common.name')}</span>
+                            {sortBy === 'personName' && <ArrowDown className="w-3.5 h-3.5" />}
                           </button>
                         </th>
                         <th className="py-3 px-4 font-medium">{t('common.memberId')}</th>
@@ -1319,7 +1451,56 @@ export const ReportsPage: React.FC = () => {
             <EmptyState title={t('reports.emptyTitle')} description={t('reports.emptyDesc')} />
           ) : (
             <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] overflow-hidden">
-              <div className="overflow-x-auto">
+              {/* Mobile Card List */}
+              <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800 tabular-nums">
+                {summaryRows.map((s) => (
+                  <div key={s.uid} className="p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
+                          {s.name}
+                        </p>
+                        <p className="text-xs font-mono text-stone-500">
+                          {s.memberId}
+                          {s.className && s.className !== '—' ? ` · ${s.className}` : ''}
+                        </p>
+                      </div>
+                      <span
+                        className={`text-sm font-bold shrink-0 ${
+                          s.total > 0 && s.pct < threshold
+                            ? 'text-red-700 dark:text-red-400'
+                            : 'text-stone-900 dark:text-stone-100'
+                        }`}
+                      >
+                        {formatNumber(s.pct)}%
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="rounded-lg bg-stone-50 dark:bg-stone-900/60 px-2.5 py-1.5">
+                        <span className="text-stone-400 block text-[11px]">{t('reports.presentDays')}</span>
+                        <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                          {formatNumber(s.present)}
+                        </span>
+                      </div>
+                      <div className="rounded-lg bg-stone-50 dark:bg-stone-900/60 px-2.5 py-1.5">
+                        <span className="text-stone-400 block text-[11px]">{t('reports.absentDays')}</span>
+                        <span className="font-semibold text-red-700 dark:text-red-400">
+                          {formatNumber(s.absent)}
+                        </span>
+                      </div>
+                      <div className="rounded-lg bg-stone-50 dark:bg-stone-900/60 px-2.5 py-1.5">
+                        <span className="text-stone-400 block text-[11px]">{t('reports.leaveDays')}</span>
+                        <span className="font-semibold text-sky-700 dark:text-sky-400">
+                          {formatNumber(s.leave)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop Table */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500">
                     <tr>

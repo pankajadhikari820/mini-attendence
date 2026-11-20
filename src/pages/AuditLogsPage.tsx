@@ -137,7 +137,35 @@ export const AuditLogsPage: React.FC = () => {
           <EmptyState title={t('audit.emptyTitle')} description={t('audit.subtitle')} />
         ) : (
           <div className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] overflow-hidden">
-            <div className="overflow-x-auto">
+            {/* Mobile Card List */}
+            <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800">
+              {filtered.map((log) => (
+                <div key={log.id} className="p-4 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs font-medium text-[#C25E00] truncate">
+                      {log.action}
+                    </span>
+                    <span className="text-[11px] font-mono text-stone-400 tabular-nums shrink-0">
+                      {log.createdAt?.toDate
+                        ? `${log.createdAt.toDate().toLocaleDateString()} ${formatTime(log.createdAt.toDate())}`
+                        : '—'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-stone-700 dark:text-stone-300 leading-relaxed">
+                    {log.summary}
+                  </p>
+                  <p className="text-[11px] text-stone-500">
+                    <span className="font-medium text-stone-800 dark:text-stone-200">
+                      {log.actorName}
+                    </span>{' '}
+                    · <span className="uppercase">{log.actorRole}</span>
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/50 text-xs text-stone-500">
                   <tr>

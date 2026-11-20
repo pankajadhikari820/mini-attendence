@@ -7,11 +7,14 @@ import {
   CameraOff,
   CheckCircle2,
   Crosshair,
+  KeyRound,
   Loader2,
   MapPin,
+  QrCode,
   RefreshCw,
   WifiOff,
   ShieldAlert,
+  XCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -650,9 +653,13 @@ export const MarkYourAttendancePage: React.FC = () => {
                       : 'border-red-200 dark:border-red-900 bg-red-50/70 dark:bg-red-950/30 text-red-900 dark:text-red-200'
                   }`}
                 >
-                  <div className="flex items-center gap-2.5 text-sm font-medium tabular-nums">
-                    <MapPin className="w-4 h-4 shrink-0" />
-                    <span>
+                  <div className="flex items-center gap-2 text-sm font-medium tabular-nums min-w-0">
+                    {locationOk ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <XCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
+                    )}
+                    <span className="truncate">
                       {(locationOk ? t('mark.withinRadius') : t('mark.outsideRadius')).replace(
                         '{distance}',
                         formatNumber(distanceMeters ?? 0)
@@ -663,7 +670,7 @@ export const MarkYourAttendancePage: React.FC = () => {
                     type="button"
                     onClick={readGpsLocation}
                     aria-label={t('mark.retryGps')}
-                    className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
+                    className="w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 shrink-0"
                   >
                     <RefreshCw className="w-4 h-4" />
                   </button>
@@ -672,29 +679,31 @@ export const MarkYourAttendancePage: React.FC = () => {
             </section>
 
             {/* Step 2: Two Tabs (Scan QR | Enter ID) */}
-            <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-5 sm:p-6 space-y-5">
+            <section className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-[#161619] p-4 sm:p-6 space-y-5">
               <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800">
                 <button
                   type="button"
                   onClick={() => handleTabSwitch('scan')}
-                  className={`py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`min-h-[42px] py-2.5 px-2 rounded-lg text-sm font-medium transition-colors inline-flex items-center justify-center gap-1.5 ${
                     tab === 'scan'
                       ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                       : 'text-stone-600 dark:text-stone-400'
                   }`}
                 >
-                  {t('mark.tabScanQr')}
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span className="truncate">{t('mark.tabScanQr')}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleTabSwitch('code')}
-                  className={`py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`min-h-[42px] py-2.5 px-2 rounded-lg text-sm font-medium transition-colors inline-flex items-center justify-center gap-1.5 ${
                     tab === 'code'
                       ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-xs'
                       : 'text-stone-600 dark:text-stone-400'
                   }`}
                 >
-                  {t('mark.tabEnterId')}
+                  <KeyRound className="w-4 h-4 shrink-0" />
+                  <span className="truncate">{t('mark.tabEnterId')}</span>
                 </button>
               </div>
 
@@ -752,23 +761,23 @@ export const MarkYourAttendancePage: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-3">
                     {cameraRunning ? (
                       <button
                         type="button"
                         onClick={stopCamera}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800"
+                        className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800"
                       >
-                        <CameraOff className="w-4 h-4" />
+                        <CameraOff className="w-4 h-4 shrink-0" />
                         <span>{t('attendance.stopCamera')}</span>
                       </button>
                     ) : (
                       <button
                         type="button"
                         onClick={() => startCamera(facingMode)}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white py-3 text-sm font-medium"
+                        className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] text-white py-3 text-sm font-medium"
                       >
-                        <Camera className="w-4 h-4" />
+                        <Camera className="w-4 h-4 shrink-0" />
                         <span>{t('attendance.startCamera')}</span>
                       </button>
                     )}
@@ -776,9 +785,9 @@ export const MarkYourAttendancePage: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleSwitchCamera}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800"
+                      className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 dark:border-stone-700 py-3 text-sm font-medium hover:bg-stone-50 dark:hover:bg-stone-800"
                     >
-                      <RefreshCw className="w-4 h-4" />
+                      <RefreshCw className="w-4 h-4 shrink-0" />
                       <span>{t('attendance.switchCamera')}</span>
                     </button>
                   </div>
@@ -819,9 +828,10 @@ export const MarkYourAttendancePage: React.FC = () => {
                   <button
                     type="submit"
                     disabled={submitting || !session}
-                    className="w-full rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white py-3 text-sm font-medium transition-colors"
+                    className="w-full min-h-[46px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#C25E00] hover:bg-[#A84F00] disabled:opacity-60 text-white py-3 text-sm font-medium transition-colors"
                   >
-                    {submitting ? t('mark.submitting') : t('mark.submitBtn')}
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{submitting ? t('mark.submitting') : t('mark.submitBtn')}</span>
                   </button>
                 </form>
               )}
